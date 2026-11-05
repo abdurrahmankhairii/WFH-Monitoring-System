@@ -1,0 +1,153 @@
+# ============================================================================
+# Copyright (c) 2026 Abdurrahman Khairi. All Rights Reserved.
+# Created strictly for Technical Assessment evaluation.
+# Unauthorized commercial use, modification, or distribution is prohibited.
+# ============================================================================
+# Dexa Group — WFH Attendance & Employee Monitoring System
+# Full-Stack Microservices Orchestration (MySQL 8.0 + Mailpit SMTP + 3 NestJS Microservices + React Frontend)
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: dexa-wfh-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root_password_2026
+      MYSQL_DATABASE: ${DB_DATABASE:-dexa_wfh_db}
+      MYSQL_USER: ${DB_USERNAME:-dexa_user}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-dexa_password_2026}
+      TZ: Asia/Jakarta
+    ports:
+      - "${DB_PORT:-3306}:3306"
+    volumes:
+      - dexa_mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "dexa_user", "-pdexa_password_2026"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: dexa-wfh-mailpit
+    restart: unless-stopped
+    ports:
+      - "1025:1025" # SMTP Server Port
+      - "8025:8025" # Web UI Inbox (View OTP & Contact Developer Emails)
+
+  employee-service:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: dexa-wfh-employee-service
+    restart: unless-stopped
+    command: ["node", "dist/apps/employee-service/main.js"]
+    depends_on:
+      mysql:
+        condition: service_healthy
+      mailpit:
+        condition: service_started
+    environment:
+      DB_TYPE: ${DB_TYPE:-mysql}
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_USERNAME: ${DB_USERNAME:-dexa_user}
+      DB_PASSWORD: ${DB_PASSWORD:-dexa_password_2026}
+      DB_DATABASE: ${DB_DATABASE:-dexa_wfh_db}
+      DB_SYNCHRONIZE: "true"
+      EMPLOYEE_SERVICE_HOST: 0.0.0.0
+      EMPLOYEE_SERVICE_PORT: 3001
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:-dexa-wfh-jwt-access-secret-2026-abdurrahman-khairi}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-dexa-wfh-jwt-refresh-secret-2026-abdurrahman-khairi}
+      OTP_EXPIRES_MINUTES: ${OTP_EXPIRES_MINUTES:-10}
+      SMTP_HOST: mailpit
+      SMTP_PORT: 1025
+      SMTP_SECURE: "false"
+      SYSTEM_NOREPLY_EMAIL: ${SYSTEM_NOREPLY_EMAIL:-noreply-wfh@dexagroup.com}
+      DEVELOPER_SUPPORT_EMAIL: ${DEVELOPER_SUPPORT_EMAIL:-abdurrahman.khairi@dexagroup.com}
+    ports:
+      - "3001:3001"
+    healthcheck:
+      test: ["CMD", "node", "-e", "const s=require('net').connect(3001,'127.0.0.1',()=>{s.end();process.exit(0)});s.on('error',()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+
+  attendance-service:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: dexa-wfh-attendance-service
+    restart: unless-stopped
+    command: ["node", "dist/apps/attendance-service/main.js"]
+    depends_on:
+      mysql:
+        condition: service_healthy
+      employee-service:
+        condition: service_healthy
+    environment:
+      DB_TYPE: ${DB_TYPE:-mysql}
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_USERNAME: ${DB_USERNAME:-dexa_user}
+      DB_PASSWORD: ${DB_PASSWORD:-dexa_password_2026}
+      DB_DATABASE: ${DB_DATABASE:-dexa_wfh_db}
+      DB_SYNCHRONIZE: "false"
+      ATTENDANCE_SERVICE_HOST: 0.0.0.0
+      ATTENDANCE_SERVICE_PORT: 3002
+      WORK_START_TIME: ${WORK_START_TIME:-08:30}
+      LATE_GRACE_MINUTES: ${LATE_GRACE_MINUTES:-15}
+      HALF_DAY_THRESHOLD_MINUTES: ${HALF_DAY_THRESHOLD_MINUTES:-240}
+    ports:
+      - "3002:3002"
+    healthcheck:
+      test: ["CMD", "node", "-e", "const s=require('net').connect(3002,'127.0.0.1',()=>{s.end();process.exit(0)});s.on('error',()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+
+  api-gateway:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: dexa-wfh-api-gateway
+    restart: unless-stopped
+    command: ["node", "dist/apps/api-gateway/main.js"]
+    depends_on:
+      employee-service:
+        condition: service_healthy
+      attendance-service:
+        condition: service_healthy
+    environment:
+      API_GATEWAY_PORT: 3000
+      EMPLOYEE_SERVICE_HOST: employee-service
+      EMPLOYEE_SERVICE_PORT: 3001
+      ATTENDANCE_SERVICE_HOST: attendance-service
+      ATTENDANCE_SERVICE_PORT: 3002
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:-dexa-wfh-jwt-access-secret-2026-abdurrahman-khairi}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-dexa-wfh-jwt-refresh-secret-2026-abdurrahman-khairi}
+      UPLOAD_DIR: /app/uploads
+    volumes:
+      - ./uploads:/app/uploads
+    ports:
+      - "3000:3000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "const s=require('net').connect(3000,'127.0.0.1',()=>{s.end();process.exit(0)});s.on('error',()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: dexa-wfh-frontend
+    restart: unless-stopped
+    depends_on:
+      api-gateway:
+        condition: service_healthy
+    ports:
+      - "5173:80"
+
+volumes:
+  dexa_mysql_data:
