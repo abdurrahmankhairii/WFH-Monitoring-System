@@ -5,6 +5,7 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 lerna-debug.log*
+pnpm-debug.log*
 
 # Diagnostic reports (https://nodejs.org/api/report.html)
 report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
@@ -20,12 +21,13 @@ lib-cov
 
 # Coverage directory used by tools like istanbul
 coverage
+coverage/
 *.lcov
 
 # nyc test coverage
 .nyc_output
 
-# Grunt intermediate storage (https://gruntjs.com/creating-plugins#storing-task-files)
+# Grunt intermediate storage (https://gruntjs.org/creating-plugins#storing-task-files)
 .grunt
 
 # Bower dependency directory (https://bower.io/)
@@ -39,6 +41,7 @@ build/Release
 
 # Dependency directories
 node_modules/
+*/node_modules/
 jspm_packages/
 
 # Snowpack dependency directory (https://snowpack.dev/)
@@ -65,10 +68,13 @@ web_modules/
 # Yarn Integrity file
 .yarn-integrity
 
-# dotenv environment variable files
+# dotenv environment variable files (Root & Monorepo Sub-packages)
 .env
 .env.*
 !.env.example
+*/.env
+*/.env.*
+!*/.env.example
 
 # parcel-bundler cache (https://parceljs.org/)
 .cache
@@ -77,10 +83,15 @@ web_modules/
 # Next.js build output
 .next
 out
+out/
 
-# Nuxt.js build / generate output
+# Nuxt.js & NestJS / React / Vite build outputs
 .nuxt
 dist
+dist/
+build/
+*/dist/
+*/build/
 .output
 
 # Gatsby files
@@ -129,6 +140,8 @@ dist
 .pnpm-store
 
 # yarn v3
+.pnp
+.pnp.js
 .pnp.*
 .yarn/*
 !.yarn/patches
@@ -147,3 +160,23 @@ vite.config.ts.timestamp-*
 
 # Turbo Repo
 .turbo
+
+# Local Uploaded Files (WFH Attendance Photo Proofs & Leave Attachments)
+uploads/
+*/uploads/
+public/uploads/
+!uploads/.gitkeep
+!*/uploads/.gitkeep
+
+# IDE & OS Files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+
+# Local Agent Rules & Skills (Not committed to repository)
+.agents/
+skill/
+AGENTS.md
+
