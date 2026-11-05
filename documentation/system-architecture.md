@@ -7,19 +7,20 @@ flowchart LR
     subgraph Client["Frontend Web (React.js + TypeScript + Tailwind CSS)"]
         direction TB
         UI_Auth["Auth Pages\n(JWT Login, New Account OTP,\nForgot Password OTP, Request Access)"]
-        UI_Emp["Employee Portal (EMPLOYEE)\n(Live Webcam Timestamp Watermark Clock-In/Out,\nDaily Plan & Accomplishment, Leave/Correction Request)"]
-        UI_Admin["HRD Admin Portal (HR_ADMIN)\n(Full Control: Master Employee CRUD & Soft Delete,\nReal-Time Monitoring, Leave Approval, Excel/CSV/PDF Export)"]
-        UI_Support["Contact Developer Modal\n(SMTP Support Ticket)"]
-        UI_Toast["Bottom-Right Toast Notification\nGreen (Success) | Red (Error) | Blue (Info)\nFull Detail: Where, What, Why"]
+        UI_Emp["Employee Workspace (EMPLOYEE)\n(Individual Dashboard with 14-Day SVG Chart & KPIs,\nLive Webcam Timestamp Watermark Clock-In/Out,\nDaily Plan & Accomplishment, Leave/Correction)"]
+        UI_Admin["System & HR Control (SYSTEM_ADMIN & HR_ADMIN)\n(Supreme Control: Master Employee CRUD & Soft Delete,\nReal-Time Monitoring, Leave Approval, Excel/CSV/PDF Export)"]
+        UI_Support["Contact Developer Modal\n(Targeted SMTP: TO System Admin, CC HR Admin + Sender)"]
+        UI_Notify["Headbar Notification Center & Bottom-Right Toasts\n(Bracket-Free: Where • What • Why\nGreen Success | Red Error | Blue Info)"]
+        UI_Theme["Theme & Layout System\n(Collapsible Window Sidebar, Dexa Red/White Logos,\nDark/Light Mode Toggle, Live Server Clock)"]
     end
 
     subgraph Gateway["API Gateway Layer (NestJS HTTP :3000)"]
-        GW["API Gateway\n- JWT Auth Guard & RolesGuard (RBAC)\n- Global Response & Exception Formatter\n- Multer Photo Upload & EXIF Timestamp Inspector\n- ExcelJS / CSV Stream Exporter\n- Swagger OpenAPI (/api/docs)"]
+        GW["API Gateway\n- JWT Auth Guard & RolesGuard (SYSTEM_ADMIN, HR_ADMIN, EMPLOYEE)\n- Global Response & Exception Formatter (Bracket-Free)\n- Multer Photo Upload & EXIF Timestamp Inspector\n- ExcelJS / CSV Stream Exporter\n- Swagger OpenAPI (/api/docs)"]
     end
 
     subgraph Microservices["NestJS Internal Microservices (TCP Transport)"]
-        MS_Emp["Employee & Auth Service (TCP :3001)\n- Bcrypt + JWT Token Issuance\n- 6-Digit OTP (Account Verification & Forgot Password)\n- Master Employee CRUD & Soft Delete\n- Access Request Approval\n- Contact Developer (SMTP Sender = User Email)"]
-        MS_Att["Attendance Service (TCP :3002)\n- Server-Side Timestamp Clock-In & Clock-Out\n- Photo Timestamp & Anti-Spoofing Verification\n- Automated Status (ON_TIME, LATE, HALF_DAY, COMPLETED)\n- Daily Work Plan & Accomplishment Log\n- Leave, Sick & Attendance Correction Workflow\n- HRD Dashboard Aggregation & Audit Log"]
+        MS_Emp["Employee & Auth Service (TCP :3001)\n- Bcrypt + JWT Token Issuance\n- 6-Digit OTP (Account Verification & Forgot Password)\n- Master Employee CRUD & Soft Delete (Mandatory NIP)\n- Access Request Approval\n- Targeted Support Routing (TO: SysAdmin, CC: HRD+Sender)"]
+        MS_Att["Attendance Service (TCP :3002)\n- Server-Side Timestamp Clock-In & Clock-Out\n- Photo Timestamp & Anti-Spoofing Verification\n- Personal Dashboard Aggregation (14-Day Trend & KPIs)\n- Automated Status (ON_TIME, LATE, HALF_DAY, COMPLETED)\n- Daily Work Plan & Accomplishment Log\n- Leave, Sick & Attendance Correction Workflow\n- HRD Dashboard Aggregation & Audit Log"]
     end
 
     subgraph Infrastructure["Database, Storage & Messaging Infrastructure"]
