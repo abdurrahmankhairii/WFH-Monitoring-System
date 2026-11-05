@@ -11,34 +11,37 @@ Designed with a **Corporate Blue (`#1E40AF` / `#2563EB`) & Dexa Group Red (`#D32
 | Assessment Requirement | Implementation in This Repository |
 | :--- | :--- |
 | **1.a Backend (TS + NestJS + MySQL)** | `backend/` — NestJS 11 TypeScript Monorepo with TypeORM & MySQL 8.0 (`users`, `employees`, `attendances`, `attendance_requests`, `access_requests`, `support_tickets`). |
-| **1.b Frontend (React.js)** | `frontend/` — React 18 + Vite + TypeScript + Tailwind CSS. |
+| **1.b Frontend (React.js)** | `frontend/` — React 18 + Vite + TypeScript + Tailwind CSS with Pertamina Operational Safety Style layout, collapsible navy window sidebar, top headbar notification center, dark/light mode toggle, and official Dexa Group red & white logos. |
 | **2.a.i Proper Database Structure** | 6 normalized 3NF relational tables with composite indexes (`UNIQUE(employee_id, attendance_date)`), soft-delete columns (`is_active`, `deleted_at`), and foreign keys. |
 | **2.a.ii Connect to Any Database** | Dynamic `DatabaseConfigModule` (`backend/libs/common/src/database/database.module.ts`) supports switching between `mysql`, `postgres`, `mariadb`, `mssql`, and `oracle` via `DB_TYPE` in `.env`. |
 | **2.a.iii API with Microservices Concept** | HTTP `api-gateway` (`:3000`) routing via NestJS TCP transport to `employee-service` (`:3001`) and `attendance-service` (`:3002`). |
-| **2.a.iv Manipulate Data (CRUD) with API** | Full CRUD + Soft Delete (`DELETE /api/employees/:id`) + Restore (`PATCH /api/employees/:id/restore`) + Attendance Clock-In/Out + Request Approval. |
-| **2.b.i Create Pages / Screens** | 10 interactive screens across Public Auth, Employee WFH Self-Service Portal, and HRD Admin Control Center. |
-| **2.b.ii Call API from/to Backend** | Centralized Axios client (`frontend/src/api/client.ts`) with Bearer JWT injection, silent refresh token retry, and global error toast interceptors. |
-| **2.b.iii Create Custom Components** | 10 custom React components (`CameraPhotoUpload`, `LiveServerClock`, `OtpInputGroup`, `InteractiveDataTable`, `PhotoLightboxModal`, `LeaveAndCorrectionModal`, `ContactDeveloperModal`, `ToastContainerBottomRight`, `DexaBrandLogo`, `CopyrightFooterWatermark`). |
-| **3.1 Use Case 1: WFH Employee Attendance** | Login -> Synced Server Clock -> Live Webcam / File Upload with burned-in timestamp watermark -> Clock-In (`daily_plan`) & Clock-Out (`daily_accomplishment`). |
-| **3.2 Use Case 2: HRD Employee Monitoring** | Master Employee CRUD (Add, Edit, Soft Delete, Restore, Resend OTP) + Real-Time Dashboard + View-Only Control of Submitted Attendance with Lightbox Proof Inspection & Excel/CSV Export. |
+| **2.a.iv Manipulate Data (CRUD) with API** | Full CRUD + Soft Delete (`DELETE /api/employees/:id`) + Restore (`PATCH /api/employees/:id/restore`) + Attendance Clock-In/Out + Request Approval with strictly mandatory NIP. |
+| **2.b.i Create Pages / Screens** | 11 interactive screens across Public Auth, Employee WFH Portal, Individual Employee Dashboard (with 14-day SVG chart), and HRD & System Control Center. |
+| **2.b.ii Call API from/to Backend** | Centralized Axios client (`frontend/src/api/client.ts`) with Bearer JWT injection, silent refresh retry, and bracket-free toast & notification center integration. |
+| **2.b.iii Create Custom Components** | Custom React components (`CameraPhotoUpload`, `LiveServerClock`, `OtpInputGroup`, `InteractiveDataTable`, `PhotoLightboxModal`, `LeaveAndCorrectionModal`, `ContactDeveloperModal`, `ToastContainerBottomRight`, `NotificationCenterDropdown`, `ThemeToggle`, `DexaBrandLogo`, `CopyrightFooterWatermark`). |
+| **3.1 Use Case 1: WFH Employee Attendance** | Login -> Synced Server Clock -> Live Webcam / File Upload with burned-in timestamp watermark -> Clock-In (`daily_plan`) & Clock-Out (`daily_accomplishment`) -> Track on personal `/dashboard`. |
+| **3.2 Use Case 2: HRD Employee Monitoring** | Master Employee CRUD (Add with mandatory NIP, Edit, Soft Delete, Restore, Resend OTP) + Real-Time Monitoring Dashboard + Lightbox Proof Inspection & Excel/CSV Export. |
 
 ---
 
 ## 2. 9+1 Core System Modules
 
-1. **RBAC & JWT Auth + Targeted 6-Digit Email OTP:**
-   - Strict separation between `HR_ADMIN` (full control over all portals) and `EMPLOYEE` (self-service attendance, history, leave/correction requests, profile, support).
-   - Daily login uses **Email + Password -> JWT**.
-   - **6-Digit Email OTP** is used strictly for **New Account Verification** (`/verify-account`) and **Forgot Password** (`/forgot-password`).
+1. **RBAC (SYSTEM_ADMIN, HR_ADMIN, EMPLOYEE) & JWT Auth + Targeted 6-Digit Email OTP:**
+   - **`SYSTEM_ADMIN`:** Supreme administrator with full access to CRUD and manage all modules, HR dashboards, attendance monitoring, employee master records, support tickets, and system settings.
+   - **`HR_ADMIN`:** Full administrative control over HR monitoring, employee CRUD, leave approvals, and payroll data exports.
+   - **`EMPLOYEE`:** Self-service attendance (clock-in/out), personal analytics dashboard, attendance history, leave/correction requests, profile, and developer support.
+   - Daily login uses direct **Email + Password -> JWT**. **6-Digit Email OTP** is enforced strictly for **New Account Verification** (`/verify-account`) and **Forgot Password** (`/forgot-password`).
 2. **Live Camera Capture & Photo Proof Timestamp Verification:**
    - HTML5 `<canvas>` burns a visual watermark bar (`Timestamp WIB + NIP + Full Name + Capture Source + Copyright`) onto every Clock-In and Clock-Out photo.
    - Backend inspects EXIF metadata (`exif-parser`) and compares `photoCapturedAt` against the server clock (`isTimestampVerified`).
 3. **Server-Side Real-Time Timestamp & Timezone Synchronization:**
    - `clock_in_time` and `clock_out_time` are strictly generated on the backend (`new Date()`) to prevent client clock spoofing.
 4. **Master Employee Management (CRUD & Soft Delete):**
-   - Full CRUD for HRD Admin using soft delete (`is_active = false`, `status = 'INACTIVE'`, `deleted_at = NOW()`) so historical attendance foreign keys are never broken.
-5. **HRD Real-Time Monitoring Dashboard & Audit Log:**
-   - Live SQL aggregations (`COUNT`, `GROUP BY` department, 7-day trend), multi-criteria filters, and `<PhotoLightboxModal />` inspection.
+   - Full CRUD for HRD & System Admins using soft delete (`is_active = false`, `status = 'INACTIVE'`, `deleted_at = NOW()`) preserving historical attendance foreign keys.
+   - **Strictly Mandatory NIP / Employee Code:** `employeeCode` is mandatory across backend and frontend. Form defaults phone to `+62` only, leaves department/position empty, and sets placeholders to `Abdurrahman Khairi`.
+5. **Dual Dashboard Architecture (HRD Real-Time Monitoring & Employee Dashboard):**
+   - **HRD Real-Time Monitoring:** Live SQL aggregations (`COUNT`, `GROUP BY` department, 7-day trend), multi-criteria filters, and `<PhotoLightboxModal />` inspection.
+   - **Individual Employee Dashboard (`/employee/dashboard`):** 14-day interactive SVG work duration bar chart (with 8.0h threshold line), punctuality distribution pattern, personal KPI summary cards, and recent session feed.
 6. **Daily Work Log / Task Summary:**
    - Captures `daily_plan` on Clock-In and mandatory `daily_accomplishment` (min 10 characters) on Clock-Out.
 7. **Automated Working Hours & Status Calculation:**
@@ -47,8 +50,11 @@ Designed with a **Corporate Blue (`#1E40AF` / `#2563EB`) & Dexa Group Red (`#D32
    - Employee self-service submission with supporting attachment + HRD `Approve`/`Reject` workflow that automatically syncs `attendances`.
 9. **Data Export & Payroll-Ready Reporting:**
    - One-click export of filtered attendance logs to **Excel (`.xlsx`)**, **CSV (`.csv`)**, and **Printable PDF View**.
-10. **Contact Developer via SMTP (Dynamic User Sender):**
-    - Dispatches support emails via Nodemailer where **`from`, `sender`, and `replyTo` strictly use the logged-in user's account email (`"${user.fullName}" <${user.email}>`)**.
+10. **Targeted SMTP Support Ticket Routing via Dynamic User Sender:**
+    - Support tickets are emailed via Nodemailer with targeted routing:
+      - **TO:** All active `SYSTEM_ADMIN` emails (`sysadmin@dexagroup.com`).
+      - **CC:** All active `HR_ADMIN` emails (`admin.hrd@dexagroup.com`) + the sender themselves.
+      - **FROM / SENDER / REPLY-TO:** The authenticated user's account name and email (`"${user.fullName}" <${user.email}>`).
 
 ---
 
@@ -56,11 +62,13 @@ Designed with a **Corporate Blue (`#1E40AF` / `#2563EB`) & Dexa Group Red (`#D32
 
 | Role | Email | Password | NIP / Code | Scenario Ready to Test |
 | :--- | :--- | :--- | :--- | :--- |
+| **`SYSTEM_ADMIN`** | `sysadmin@dexagroup.com` | `AdminDexa2026!` | `DEXA-SYS-001` | **Supreme Administrator:** Full control over all system modules, master employee CRUD, attendance monitoring, support ticket resolution, and system settings. |
 | **`HR_ADMIN`** | `admin.hrd@dexagroup.com` | `AdminDexa2026!` | `DEXA-2026-001` | Full access to HRD Dashboard, Attendance Audit & Export, Master Employee CRUD, and Employee Self-Service. |
 | **`EMPLOYEE`** | `budi.santoso@dexagroup.com` | `EmployeeDexa2026!` | `DEXA-2026-002` | Ready to **Clock-In** today with live webcam or file upload. |
 | **`EMPLOYEE`** | `siti.rahmawati@dexagroup.com` | `EmployeeDexa2026!` | `DEXA-2026-003` | Already Clocked-In today — ready to **Clock-Out** with mandatory daily accomplishment. |
 | **`EMPLOYEE`** | `andi.pratama@dexagroup.com` | `EmployeeDexa2026!` | `DEXA-2026-004` | Includes historical logs + an unverified file-upload sample for HRD Lightbox inspection. |
 | **`EMPLOYEE` (Unverified)** | `nadia.putri@dexagroup.com` | *(Set on `/verify-account`)* | `DEXA-2026-005` | Pre-seeded with 6-digit OTP **`123456`** to test **New Account Verification** immediately. |
+
 
 ---
 
