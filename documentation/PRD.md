@@ -47,16 +47,31 @@ To protect the author's intellectual property during technical assessment evalua
    // [Feature]: Which core feature (#1 - #10) this code implements.
    ```
 
+### 2.3. Mandatory Git Commit, Branching & Push Restrictions
+1. **Commit Message Format (Strictly NO Parentheses `()`):**
+   - Use conventional prefixes without parentheses: `feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore:`, `perf:`, `style:`.
+   - **Never include parentheses `()`** anywhere in commit messages (e.g., NEVER `feat(auth):`, NEVER `docs(skill):`, NEVER `fix(route):`). Always format as `prefix: clear detail description`.
+   - Provide a clear, detailed, and human-friendly description of what was changed and why.
+2. **NEVER Push to Remote Repository (`jangan di push`):**
+   - Keep all git commits strictly local. Never push to remote unless explicitly requested by the user.
+3. **Commit on Designated Feature Branches:**
+   - Commit files to their corresponding feature branch (e.g., documentation files on branch `Documentation`, feature code on their respective feature branch).
+4. **Exclude Agent & Skill Files from Git Commits:**
+   - `skill/`, `.agents/`, and `AGENTS.md` are local agent memory and execution instructions and MUST NOT be committed to the repository (ignored via `.gitignore`).
+
 ---
 
 ## 3. Complete Feature Specifications (9 Core Features + Security & Support Extensions)
 
 ### Feature 1: Role-Based Access Control (RBAC) & JWT/SSO Authentication
-- **Purpose:** Strictly segregates page and API access between **Employees (`EMPLOYEE`)** and **HRD Administrators (`HR_ADMIN`)**, where Admin has full control over the entire platform.
+- **Purpose:** Strictly segregates page and API access between three system roles:
+  1. **`SYSTEM_ADMIN` (System Administrator):** Supreme authority with complete control over all application modules, user management, HR monitoring, employee master records, attendance auditing, ticket resolution, and system settings.
+  2. **`HR_ADMIN` (HR Administrator):** Full administrative control over HR monitoring dashboards, employee CRUD, leave/correction approval workflows, and payroll data export.
+  3. **`EMPLOYEE` (Standard Employee):** Workforce self-service access to individual dashboard, real-time WFH clock-in/out with photo timestamp proof, personal attendance history, leave/correction requests, profile management, and developer support.
 - **Technical Mechanism:**
   - Credentials verified via `bcrypt` against the `users` table (which explicitly stores `email`, `password_hash`, and `role`).
   - Issues signed **JWT (`accessToken` & `refreshToken`)** containing `{ userId, email, employeeId, role }`.
-  - Backend enforces access via `JwtAuthGuard` and `RolesGuard` (`@Roles(UserRole.HR_ADMIN)`), while React enforces route protection via `<ProtectedRoute allowedRoles={[...]} />`.
+  - Backend enforces access via `JwtAuthGuard` and `RolesGuard` (`@Roles(UserRole.SYSTEM_ADMIN, UserRole.HR_ADMIN)`), while React enforces route protection via `<ProtectedRoute allowedRoles={[...]} />`.
   - **OTP Policy:** Daily login uses direct Email + Password -> JWT for seamless UX. **6-Digit Email OTP** is enforced strictly for **New Account Verification** and **Forgot Password**.
 
 ### Feature 2: Live Camera Capture, Photo Proof Verification & Timestamp Anti-Spoofing
@@ -83,17 +98,34 @@ To protect the author's intellectual property during technical assessment evalua
   - On `POST /api/attendances/clock-in` and `POST /api/attendances/clock-out`, the backend **never trusts client time payloads** for attendance timestamps; `attendance-service` strictly assigns `new Date()` on the server (normalized to `Asia/Jakarta` WIB / UTC).
 
 ### Feature 4: Master Employee Management (CRUD & Soft Delete)
-- **Purpose:** Allows HRD Admin to create new employees, update roles/departments/positions, manage active status, and deactivate resigned employees without breaking historical attendance foreign keys.
+- **Purpose:** Allows HRD and System Administrators to create new employees, update roles/departments/positions, manage active status, and deactivate resigned employees without breaking historical attendance foreign keys.
 - **Technical Mechanism:**
   - Full REST endpoints (`GET`, `POST`, `PATCH`, `DELETE /api/employees`) routed to `employee-service`.
+  - **Strictly Mandatory NIP / Employee Code:** `employeeCode` is mandatory on registration/creation (`CreateEmployeeDto.employeeCode` required, backend returns HTTP 400 if empty or whitespace, frontend form enforces `required`).
+  - **Form Pre-Fill Defaults:**
+    - Phone number defaults to `+62` only.
+    - Department and Job Position default to empty (`''`), requiring intentional selection.
+    - Full Name placeholder: `e.g., Abdurrahman Khairi`.
+    - Corporate Email placeholder: `abdurrahman.khairi@dexagroup.com`.
   - Uses **Soft Delete** (`is_active = false`, `status = 'INACTIVE'`, and TypeORM `@DeleteDateColumn() deleted_at`) instead of hard SQL `DELETE`, preserving 100% of past `attendances` and `attendance_requests` records.
 
-### Feature 5: HRD Real-Time Monitoring Dashboard & Audit Log
-- **Purpose:** Gives HRD instant visibility into daily attendance metrics (Total Active Employees, Present On-Time, Late, Completed Clock-Out, On Leave/Sick, Absent) and a searchable audit log with photo proof verification.
+### Feature 5: Dual Dashboard Architecture (HRD Real-Time Monitoring & Individual Employee Dashboard)
+
+#### Feature 5.A: HRD Real-Time Monitoring Dashboard & Audit Log
+- **Purpose:** Gives HRD and System Admins instant visibility into daily attendance metrics (Total Active Employees, Present On-Time, Late, Completed Clock-Out, On Leave/Sick, Absent) and a searchable audit log with photo proof verification.
 - **Technical Mechanism:**
   - Backend executes SQL aggregations (`COUNT`, `GROUP BY`, `LEFT JOIN` between `employees` and `attendances`).
   - Dynamic filtering by date range (`startDate` to `endDate`), `department`, `status`, `capture_source`, and employee name/NIP keyword search.
   - Clicking any photo thumbnail opens `<PhotoLightboxModal />` showing full-resolution Clock-In & Clock-Out photos, burned-in watermarks, EXIF/Webcam verification status, IP/device metadata, and daily work logs.
+
+#### Feature 5.B: Dedicated Individual Employee Dashboard (Self-Service Analytics)
+- **Purpose:** Provides each employee with a dedicated `/dashboard` or `/employee/dashboard` page to track personal WFH performance, historical punctuality patterns, and leave status.
+- **Technical Mechanism:**
+  - Dedicated backend endpoint: `GET /api/attendances/my-dashboard` (routed via TCP pattern `ATTENDANCE_PATTERNS.MY_DASHBOARD` to `attendance-service`).
+  - **14-Day Interactive SVG Work Duration Chart:** Custom bar chart visualizing daily logged work hours alongside an 8.0-hour reference threshold line, weekend shading, and interactive hover tooltips.
+  - **Punctuality Pattern Distribution:** Aggregates On-Time, Late, Half-Day, and Leave sessions into visual ratio bars.
+  - **Personal KPI Summary Cards:** Total Logged Hours, Attendance Rate (%), On-Time Reliability Rate (%), and Remaining Leave Balance.
+  - **Recent Session Feed & Lightbox:** Quick preview of recent attendance photo proofs and work accomplishments.
 
 ### Feature 6: Daily Work Log / Task Summary Submission
 - **Purpose:** Correlates WFH attendance hours with concrete daily deliverables.
@@ -121,21 +153,37 @@ To protect the author's intellectual property during technical assessment evalua
   - HRD filters by date range/month and department, then clicks **Export Excel (`.xlsx`)**, **Export CSV (`.csv`)**, or **Print / PDF Report**.
   - Backend uses `exceljs` to generate formatted spreadsheets containing NIP, Name, Department, Date, Clock-In, Clock-Out, Duration (Hours/Mins), Status, Photo Verification Status, Daily Plan, and Accomplishment, streaming the buffer directly to the browser.
 
-### Feature 10: Contact Developer / Support Ticket via Dynamic User SMTP Sender
-- **Purpose:** Built-in helpdesk channel for any user experiencing issues.
+### Feature 10: Targeted SMTP Support Ticket Routing via Dynamic User Sender
+- **Purpose:** Built-in helpdesk channel routing technical support tickets directly to System Administrators while keeping HR Admin and the user informed.
 - **Technical Mechanism:**
-  - Logged-in user submits category, module location, subject, and message.
-  - Saved in `support_tickets` and emailed via `Nodemailer` where **`from: '"${user.fullName} (WFH System)" <${user.email}>'` and `replyTo: user.email`** are dynamically populated from the authenticated user's `users.email` record.
+  - Logged-in user submits category, module location, subject, and message via `<ContactDeveloperModal />`.
+  - Saved to `support_tickets` in MySQL via `employee-service`.
+  - Dispatches email via Nodemailer with strict targeted recipient routing:
+    - **TO:** All active users with role `SYSTEM_ADMIN` (`sysadmin@dexagroup.com`).
+    - **CC:** All active users with role `HR_ADMIN` (`admin.hrd@dexagroup.com`) + the sender's own email.
+    - **FROM / SENDER / REPLY-TO:** The authenticated user's account name and email (`"${user.fullName}" <${user.email}>`).
 
 ---
 
-## 4. UI/UX Theme & Mandatory Bottom-Right Toast Rules
+## 4. UI/UX Theme, Layout Concept & Notification Center
 
-1. **Theme:** **Corporate Blue (`#1E40AF` / `#2563EB` / `#0F172A`)** paired with **Dexa Group Red (`#D32F2F` / `#E11D48`)** on the logo and key brand accents, rendered on eye-friendly soft slate/white surfaces (`#F8FAFC` / `#FFFFFF`).
-2. **Bottom-Right Toast Notification (`bottom-right`):**
-   - Triggered on **every** action (CRUD, Auth, OTP, Clock-In/Out, Photo Capture, Leave Request, Export, Filter, Support Ticket, Validation/Server Error).
-   - **Colors:** **Green (`success`)**, **Red (`error`)**, **Blue (`info`)**.
-   - **Mandatory Content:** Every toast displays **`[WHERE]`** (module/feature), **`WHAT`** (action summary), and **`WHY`** (detailed reason/result).
+1. **Brand Identity & Dual Logo System:**
+   - **Light Mode Logo:** `/logo-dexa-red.png` (`frontend/public/logo-dexa-red.png`)
+   - **Dark Mode Logo:** `/logo-dexa-white.png` (`frontend/public/logo-dexa-white.png`)
+   - Color Scheme: **Corporate Navy Blue (`#0A2D62` / `#1a3d6e`)** paired with **Dexa Group Red (`#D32F2F`)** accents, with full dark mode support across all screens.
+2. **Layout Concept (Pertamina Operational Safety Style):**
+   - **Left Collapsible Window Sidebar:** Navy gradient (`bg-gradient-to-b from-[#0A2D62] to-[#1a3d6e] dark:from-slate-900 dark:to-slate-950`) that opens (`w-64`) and closes/collapses (`w-[72px]`) smoothly like a window.
+   - **Dedicated Navigation Sections:**
+     - **Employee Workspace (Top):** Personal Dashboard, WFH Clock-In / Out, My Attendance & Leave, My Profile & Security.
+     - **System & HR Control (Bottom):** Real-Time Dashboard, Attendance Monitoring, Master Employees (with dedicated `SYS_ADMIN` / `HR_ADMIN` role badge).
+     - **Bottom Utility:** Need Help (SMTP), Sign Out, and visible copyright notice.
+   - **Top Headbar (`h-16`):** Window Sidebar Toggle + Dexa Brand Logo on the left; Live Server Date/Time, Dark/Light Mode Switch (`<ThemeToggle />`), Headbar Notification Center Bell & Dropdown (`<NotificationCenterDropdown />`), Support quick button, and User Account Dropdown Menu on the right.
+3. **Typography:** Clean, minimalist, human-friendly typography (`Plus Jakarta Sans` / `Inter`), avoiding robotic AI-generated aesthetic.
+4. **Normal Notifications Without `[...]` Brackets (`bottom-right` Toast + Headbar Notification Center):**
+   - Every action (CRUD, Auth, OTP, Clock-In/Out, Photo Capture, Leave Request, Export, Filter, Support Ticket, Validation/Server Error) triggers a bottom-right toast AND adds an entry to the Headbar Notification Center.
+   - **Strict No-Brackets Rule:** Formatted naturally without square brackets `[...]` (e.g., `Master Employee • Create` or `WFH Attendance • Clock In`).
+   - **Colors:** Green (`success`), Red (`error`), Blue (`info`).
+   - **Full 3-Part Description:** `where` (clean module label), `what` (action summary), and `why` (detailed result/explanation).
 
 ---
 
@@ -154,7 +202,7 @@ erDiagram
         uuid id PK
         varchar email UK "Explicit user email"
         varchar password_hash
-        enum role "HR_ADMIN | EMPLOYEE"
+        enum role "SYSTEM_ADMIN | HR_ADMIN | EMPLOYEE"
         boolean is_verified
         boolean is_active
         datetime last_login_at
@@ -165,7 +213,8 @@ erDiagram
     EMPLOYEES {
         uuid id PK
         uuid user_id FK
-        varchar employee_code UK "e.g. DEXA-2026-001"
+        varchar employee_code UK "Strictly mandatory NIP"
+
         varchar full_name
         varchar email UK "Synced with users.email"
         varchar department
