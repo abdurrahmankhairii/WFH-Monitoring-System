@@ -19,6 +19,7 @@ import {
   MyHistoryPayload,
   ReviewAttendanceRequestPayload,
   SummaryPayload,
+  UpdatePolicyPayload,
 } from '@app/common';
 import { AttendanceService } from './attendance/attendance.service';
 import { ExportService } from './export/export.service';
@@ -95,6 +96,20 @@ export class AttendanceServiceController {
   @MessagePattern(ATTENDANCE_PATTERNS.EXPORT)
   exportAttendance(@Payload() payload: ExportPayload) {
     return this.exportService.exportAttendance(payload);
+  }
+
+  // Feature: Company Policy & Workflow Configuration — Purpose: Handles TCP `attendance.get_policy` message to retrieve WFH workflow mode and Overtime calculation status.
+  // OOP: Message Handler (TCP Request Handler) — Connected To: AttendanceService.getSystemPolicy() -> GET /api/system/policy.
+  @MessagePattern(ATTENDANCE_PATTERNS.GET_POLICY)
+  getPolicy() {
+    return this.attendanceService.getSystemPolicy();
+  }
+
+  // Feature: Company Policy & Workflow Configuration — Purpose: Handles TCP `attendance.update_policy` message for HR Admin & System Admin configuration changes.
+  // OOP: Message Handler (TCP Request Handler) — Connected To: AttendanceService.updateSystemPolicy() -> PATCH /api/system/policy.
+  @MessagePattern(ATTENDANCE_PATTERNS.UPDATE_POLICY)
+  updatePolicy(@Payload() payload: UpdatePolicyPayload) {
+    return this.attendanceService.updateSystemPolicy(payload);
   }
 
   // Feature: Core System Architecture — Purpose: Handles TCP `attendance_request.create` message.
