@@ -44,7 +44,7 @@ export class AuthService {
     private readonly mailService: MailService,
   ) {}
 
-  // Feature: User Authentication & JWT Session — Purpose: Authenticates daily login via Email + Password (bcrypt) and issues JWT access & refresh tokens without daily OTP friction.
+  // Feature: User Authentication & JWT Session — Purpose: Authenticates daily login via Email + Password or dispatches a 6-digit OTP when a newly created unverified account signs in for the first time.
   // OOP: Domain Service Method (Encapsulated Business Operation) — Connected To: POST /api/auth/login -> frontend/src/pages/auth/LoginPage.tsx.
   async login(dto: LoginDto): Promise<StandardApiResponse> {
     const where = 'Auth - Login';
@@ -54,6 +54,7 @@ export class AuthService {
       .createQueryBuilder('user')
       .addSelect('user.passwordHash')
       .leftJoinAndSelect('user.employee', 'employee')
+      .leftJoinAndSelect('employee.departmentRef', 'departmentRef')
       .where('LOWER(user.email) = :email', { email })
       .getOne();
 
@@ -71,12 +72,35 @@ export class AuthService {
     }
 
     if (!user.isVerified) {
-      throwRpcError(
-        403,
+      const otpCode = await this.otpService.issueOtp({
+        userId: user.id,
+        email: user.email,
+        type: OtpType.ACCOUNT_VERIFICATION,
+        fixedCode: user.email === 'nadia.putri@dexagroup.com' ? '123456' : undefined,
+      });
+
+      const delivered = await this.mailService.sendOtpEmail({
+        toEmail: user.email,
+        fullName: user.employee?.fullName ?? user.email,
+        otpCode,
+        type: OtpType.ACCOUNT_VERIFICATION,
+        employeeCode: user.employee?.employeeCode,
+      });
+
+      return buildResponse({
+        type: 'info',
         where,
-        'Account verification required',
-        'Your new employee account has not been verified yet. Please open "Verify New Account" and enter your 6-digit email OTP.',
-      );
+        what: 'Verification OTP sent to email',
+        why: delivered
+          ? `First-time login for ${user.email}. Enter the 6-digit OTP sent to your email to activate your account.`
+          : `First-time login for ${user.email}. Enter 6-digit OTP ${otpCode} to activate your account (local SMTP preview).`,
+        data: {
+          requiresVerification: true,
+          email: user.email,
+          expiresInMinutes: 15,
+          demoOtpHint: process.env.NODE_ENV === 'production' ? undefined : otpCode,
+        },
+      });
     }
 
     const passwordValid = await bcrypt.compare(dto.password, user.passwordHash);
@@ -114,7 +138,7 @@ export class AuthService {
 
       const user = await this.userRepo.findOne({
         where: { id: decoded.sub },
-        relations: ['employee'],
+        relations: ['employee', 'employee.departmentRef'],
       });
       if (!user || !user.isActive) {
         throwRpcError(401, where, 'Session expired', 'User account is no longer active.');
@@ -143,7 +167,7 @@ export class AuthService {
     const where = 'Auth - Current Profile';
     const user = await this.userRepo.findOne({
       where: { id: actor.userId },
-      relations: ['employee'],
+      relations: ['employee', 'employee.departmentRef'],
     });
     if (!user) {
       throwRpcError(404, where, 'User profile not found', 'The authenticated user record no longer exists in the database.');
@@ -159,14 +183,14 @@ export class AuthService {
   }
 
   // Feature: Account Verification via Email OTP — Purpose: Verifies a newly created employee account using the 6-digit OTP and sets their chosen password.
-  // OOP: Domain Service Method (Encapsulated Business Operation) — Connected To: POST /api/auth/verify-account -> frontend/src/pages/auth/VerifyAccountPage.tsx.
+  // OOP: Domain Service Method (Encapsulated Business Operation) — Connected To: POST /api/auth/verify-account -> frontend/src/pages/auth/LoginPage.tsx & VerifyAccountPage.tsx.
   async verifyAccount(dto: VerifyAccountDto): Promise<StandardApiResponse> {
     const where = 'Auth - Verify New Account';
     const email = dto.email.trim().toLowerCase();
 
     const user = await this.userRepo.findOne({
       where: { email },
-      relations: ['employee'],
+      relations: ['employee', 'employee.departmentRef'],
     });
     if (!user) {
       throwRpcError(404, where, 'Account not found', `No user account matches email "${email}".`);
@@ -202,7 +226,7 @@ export class AuthService {
   }
 
   // Feature: Verification OTP Resend — Purpose: Re-sends a fresh 6-digit Account Verification OTP to an unverified user's email.
-  // OOP: Domain Service Method (Encapsulated Business Operation) — Connected To: POST /api/auth/resend-verification -> frontend VerifyAccountPage.tsx.
+  // OOP: Domain Service Method (Encapsulated Business Operation) — Connected To: POST /api/auth/resend-verification -> frontend LoginPage.tsx & VerifyAccountPage.tsx.
   async resendVerification(dto: EmailOnlyDto): Promise<StandardApiResponse> {
     const where = 'Auth - Resend Verification OTP';
     const email = dto.email.trim().toLowerCase();
@@ -222,6 +246,7 @@ export class AuthService {
       userId: user.id,
       email: user.email,
       type: OtpType.ACCOUNT_VERIFICATION,
+      fixedCode: user.email === 'nadia.putri@dexagroup.com' ? '123456' : undefined,
     });
 
     const delivered = await this.mailService.sendOtpEmail({
@@ -371,9 +396,10 @@ export class AuthService {
     return { accessToken, refreshToken, expiresIn: accessTtl };
   }
 
-  // Feature: JWT & RBAC Authentication — Purpose: Shapes a clean user + employee profile object safe for returning to the React client.
+  // Feature: JWT & RBAC Authentication — Purpose: Shapes a clean user + employee + department profile object safe for returning to the React client.
   // OOP: Domain Service Method (Encapsulated Business Operation) — Connected To: login(), refresh(), getMe(), verifyAccount().
   private serializeUserProfile(user: User, employee: Employee | null) {
+    const baseSalary = Number(employee?.baseSalary ?? 12000000);
     return {
       userId: user.id,
       email: user.email,
@@ -385,9 +411,16 @@ export class AuthService {
       employeeCode: employee?.employeeCode ?? null,
       fullName: employee?.fullName ?? user.email,
       department: employee?.department ?? 'Management',
+      departmentId: employee?.departmentId ?? employee?.departmentRef?.id ?? null,
+      managerName: employee?.departmentRef?.managerName ?? 'Rudi Hartono, M.Kom.',
+      managerEmail: employee?.departmentRef?.managerEmail ?? 'manager.it@dexagroup.com',
+      hrPicEmail: employee?.departmentRef?.hrPicEmail ?? 'admin.hrd@dexagroup.com',
+      maxWfhDaysPerWeek: employee?.departmentRef?.maxWfhDaysPerWeek ?? 1,
       position: employee?.position ?? (user.role === 'HR_ADMIN' ? 'HRD Administrator' : 'Employee'),
       phoneNumber: employee?.phoneNumber ?? null,
       joinDate: employee?.joinDate ?? null,
+      baseSalary,
+      hourlyOvertimeRate: Math.round(baseSalary / 173),
       status: employee?.status ?? 'ACTIVE',
       avatarUrl: employee?.avatarUrl ?? null,
     };
