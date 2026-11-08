@@ -8,7 +8,12 @@ import { AttendanceStatus, PhotoCaptureSource } from '../constants/enums';
 import { DATETIME_COLUMN } from './column-types';
 import { Employee } from './employee.entity';
 
-// Feature: WFH Attendance Session Entity — Purpose: One WFH attendance record per employee per WIB calendar day.
+const BIGINT_ZERO_TRANSFORMER = {
+  to: (value?: number | null) => (value !== undefined && value !== null ? Math.round(Number(value)) : 0),
+  from: (value?: string | number | null) => (value !== undefined && value !== null ? Number(value) : 0),
+};
+
+// Feature: WFH Attendance Session Entity — Purpose: One WFH attendance record per employee per WIB calendar day including overtime and payroll calculation fields.
 // OOP: Domain Entity (TypeORM Relational Model) — Connected To: attendance.service.ts, export.service.ts, and attendances table.
 @Entity('attendances')
 @Index('UQ_attendance_employee_date', ['employeeId', 'attendanceDate'], { unique: true })
@@ -39,6 +44,23 @@ export class Attendance {
 
   @Column({ name: 'late_minutes', type: 'int', default: 0 })
   lateMinutes: number;
+
+  @Column({ name: 'overtime_minutes', type: 'int', default: 0 })
+  overtimeMinutes: number;
+
+  @Column({ name: 'overtime_multiplier_hours', type: 'double', default: 0 })
+  overtimeMultiplierHours: number;
+
+  @Column({
+    name: 'overtime_pay_amount',
+    type: 'bigint',
+    default: 0,
+    transformer: BIGINT_ZERO_TRANSFORMER,
+  })
+  overtimePayAmount: number;
+
+  @Column({ name: 'wfh_approved', type: 'boolean', default: true })
+  wfhApproved: boolean;
 
   @Column({ name: 'clock_in_photo_url', type: 'text', nullable: true })
   clockInPhotoUrl: string | null;

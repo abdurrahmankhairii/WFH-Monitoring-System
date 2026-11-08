@@ -3,7 +3,8 @@
 // Created strictly for Technical Assessment evaluation.
 // Unauthorized commercial use, modification, or distribution is prohibited.
 // ============================================================================
-import { IsDateString, IsEnum, IsIn, IsOptional, IsString, Matches, MaxLength, MinLength } from 'class-validator';
+import { Type } from 'class-transformer';
+import { IsBoolean, IsDateString, IsEnum, IsIn, IsInt, IsOptional, IsString, Matches, Max, MaxLength, Min, MinLength } from 'class-validator';
 import {
   ApprovalStatus,
   AttendanceRequestType,
@@ -11,6 +12,7 @@ import {
   ExportFormat,
   PhotoCaptureSource,
   SupportCategory,
+  WfhWorkflowMode,
 } from '../constants/enums';
 import { PaginationQueryDto } from './employee.dto';
 import { EmptyToUndefined, TIME_HHMM_REGEX, Trim } from './transformers';
@@ -121,7 +123,7 @@ export class MyHistoryQueryDto extends PaginationQueryDto {
   endDate?: string;
 }
 
-// Feature: WFH Attendance & Request Validation DTOs — Purpose: Self-service Leave / Sick / Correction request (multipart, optional proof attachment).
+// Feature: WFH Attendance & Request Validation DTOs — Purpose: Self-service WFH Approval, Overtime, Leave, Sick, or Correction request (multipart, optional proof attachment).
 // OOP: Data Transfer Object (Encapsulated Validation Contract) — Connected To: POST /api/attendance-requests -> attendance-requests.service.ts create().
 export class CreateAttendanceRequestDto {
   @IsEnum(AttendanceRequestType)
@@ -139,6 +141,14 @@ export class CreateAttendanceRequestDto {
   @IsOptional()
   @Matches(TIME_HHMM_REGEX, { message: 'Requested clock-out must use HH:mm format' })
   requestedClockOut?: string;
+
+  @EmptyToUndefined()
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(30)
+  @Max(720)
+  overtimeMinutes?: number;
 
   @Trim()
   @IsString()
@@ -200,7 +210,25 @@ export class ContactDeveloperDto {
 
   @Trim()
   @IsString()
-  @MinLength(10, { message: 'Message must be at least 10 characters' })
-  @MaxLength(5000)
+  @MinLength(10)
+  @MaxLength(4000)
   message: string;
+}
+
+// Feature: Company Policy & Workflow Configuration DTO — Purpose: Validates HR Admin / System Admin payload for updating WFH workflow mode, Overtime calculation toggle, and weekly quota.
+// OOP: Data Transfer Object (Encapsulated Validation Contract) — Connected To: PATCH /api/system/policy (api-gateway system.controller.ts) -> attendance-service updatePolicy().
+export class UpdatePolicyDto {
+  @IsOptional()
+  @IsEnum(WfhWorkflowMode)
+  wfhWorkflowMode?: WfhWorkflowMode;
+
+  @IsOptional()
+  @IsBoolean()
+  enableOvertime?: boolean;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(5)
+  maxWfhDaysPerWeek?: number;
 }

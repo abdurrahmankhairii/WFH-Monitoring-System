@@ -9,7 +9,12 @@ import { DATETIME_COLUMN } from './column-types';
 import { Employee } from './employee.entity';
 import { User } from './user.entity';
 
-// Feature: Leave & Attendance Correction Request Entity — Purpose: Self-service Leave / Sick / Attendance Correction requests with proof attachment and HRD approval workflow.
+const BIGINT_NULLABLE_TRANSFORMER = {
+  to: (value?: number | null) => (value !== undefined && value !== null ? Math.round(Number(value)) : null),
+  from: (value?: string | number | null) => (value !== undefined && value !== null ? Number(value) : null),
+};
+
+// Feature: WFH Approval, Overtime, Leave & Correction Request Entity — Purpose: Self-service WFH Approval (1-day/week quota), Overtime, Leave, Sick & Correction requests with Manager & HR email routing.
 // OOP: Domain Entity (TypeORM Relational Model) — Connected To: attendance-service attendance-requests.service.ts (create/review + attendance sync), frontend.
 @Entity('attendance_requests')
 @Index('IDX_att_req_employee_date', ['employeeId', 'targetDate'])
@@ -36,6 +41,26 @@ export class AttendanceRequest {
 
   @Column({ name: 'requested_clock_out', type: DATETIME_COLUMN, nullable: true })
   requestedClockOut: Date | null;
+
+  @Column({ name: 'overtime_minutes', type: 'int', nullable: true })
+  overtimeMinutes: number | null;
+
+  @Column({
+    name: 'estimated_overtime_pay',
+    type: 'bigint',
+    nullable: true,
+    transformer: BIGINT_NULLABLE_TRANSFORMER,
+  })
+  estimatedOvertimePay: number | null;
+
+  @Column({ name: 'manager_email', type: 'varchar', length: 150, nullable: true })
+  managerEmail: string | null;
+
+  @Column({ name: 'cc_emails', type: 'varchar', length: 300, nullable: true })
+  ccEmails: string | null;
+
+  @Column({ name: 'email_dispatched', type: 'boolean', default: false })
+  emailDispatched: boolean;
 
   @Column({ type: 'text' })
   reason: string;

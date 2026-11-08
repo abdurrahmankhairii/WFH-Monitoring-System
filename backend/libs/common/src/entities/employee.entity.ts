@@ -10,6 +10,7 @@ import {
   Entity,
   Index,
   JoinColumn,
+  ManyToOne,
   OneToMany,
   OneToOne,
   PrimaryGeneratedColumn,
@@ -18,9 +19,15 @@ import {
 import { EmployeeStatus } from '../constants/enums';
 import { Attendance } from './attendance.entity';
 import { DATETIME_COLUMN } from './column-types';
+import { Department } from './department.entity';
 import { User } from './user.entity';
 
-// Feature: Master Employee & Profile Entity — Purpose: Master employee profile (NIP, department, position) linked 1-to-1 with a users row.
+const BIGINT_NUMBER_TRANSFORMER = {
+  to: (value?: number | null) => (value !== undefined && value !== null ? Math.round(Number(value)) : 12000000),
+  from: (value?: string | number | null) => (value !== undefined && value !== null ? Number(value) : 12000000),
+};
+
+// Feature: Master Employee & Profile Entity — Purpose: Master employee profile (NIP, department, position, baseSalary) linked with users and departments.
 // OOP: Domain Entity (TypeORM Relational Model) — Connected To: employees.service.ts, attendance.service.ts, and employees table.
 @Entity('employees')
 @Index('IDX_employees_department', ['department'])
@@ -51,8 +58,23 @@ export class Employee {
   @Column({ type: 'varchar', length: 100 })
   department: string;
 
+  @Column({ name: 'department_id', type: 'uuid', nullable: true })
+  departmentId: string | null;
+
+  @ManyToOne(() => Department, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'department_id' })
+  departmentRef?: Department | null;
+
   @Column({ type: 'varchar', length: 100 })
   position: string;
+
+  @Column({
+    name: 'base_salary',
+    type: 'bigint',
+    default: 12000000,
+    transformer: BIGINT_NUMBER_TRANSFORMER,
+  })
+  baseSalary: number;
 
   @Column({ name: 'phone_number', type: 'varchar', length: 30, nullable: true })
   phoneNumber: string | null;

@@ -19,6 +19,7 @@ import {
   RejectAccessRequestDto,
   ReviewAttendanceRequestDto,
   UpdateEmployeeDto,
+  UpdatePolicyDto,
 } from '../dto';
 import { ActorContext } from './auth.interface';
 
@@ -113,6 +114,10 @@ export interface AttendanceRequestQueryPayload extends ActorPayload {
 
 export interface ReviewAttendanceRequestPayload extends IdActorPayload {
   dto: ReviewAttendanceRequestDto;
+}
+
+export interface UpdatePolicyPayload extends ActorPayload {
+  dto: UpdatePolicyDto;
 }
 
 // Feature: Core System Architecture — Purpose: Export file transported over TCP as base64 and streamed by the gateway to the browser.

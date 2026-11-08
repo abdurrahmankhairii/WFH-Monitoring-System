@@ -5,7 +5,7 @@
 // ============================================================================
 
 // Feature: Domain Enumerations & Status Types — Purpose: Single source of truth for every enumerated domain value shared by all microservices and the API gateway.
-// OOP: Functional Helper Module — Connected To: libs/common/src/entities/*.entity.ts (DB enum columns), libs/common/src/dto/*.dto.ts (validation),.
+// OOP: Functional Helper Module — Connected To: libs/common/src/entities/*.entity.ts (DB enum columns), libs/common/src/dto/*.dto.ts (validation).
 
 export enum UserRole {
   SYSTEM_ADMIN = 'SYSTEM_ADMIN',
@@ -35,6 +35,8 @@ export enum PhotoCaptureSource {
 }
 
 export enum AttendanceRequestType {
+  WFH_APPROVAL = 'WFH_APPROVAL',
+  OVERTIME = 'OVERTIME',
   LEAVE = 'LEAVE',
   SICK = 'SICK',
   CORRECTION = 'CORRECTION',
@@ -44,6 +46,11 @@ export enum ApprovalStatus {
   PENDING = 'PENDING',
   APPROVED = 'APPROVED',
   REJECTED = 'REJECTED',
+}
+
+export enum WfhWorkflowMode {
+  STRICT_APPROVAL = 'STRICT_APPROVAL',
+  NOTICE_ONLY = 'NOTICE_ONLY',
 }
 
 export enum OtpType {

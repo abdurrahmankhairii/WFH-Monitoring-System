@@ -20,6 +20,15 @@ export interface ClockInEvaluation {
 export interface ClockOutEvaluation {
   status: AttendanceStatus.COMPLETED | AttendanceStatus.HALF_DAY;
   workDurationMinutes: number;
+  overtimeMinutes: number;
+}
+
+export interface OvertimePayCalculation {
+  overtimeMinutes: number;
+  overtimeHoursRaw: number;
+  overtimeMultiplierHours: number;
+  hourlyBaseRate: number;
+  overtimePayAmount: number;
 }
 
 // Feature: Automated Working Hours & Status Rules — Purpose: Reads company work schedule from environment variables with safe defaults (08:30 WIB, 15 min grace).
@@ -44,13 +53,69 @@ export function evaluateClockIn(clockInTime: Date, config: WorkScheduleConfig): 
   };
 }
 
-// Feature: Automated Working Hours & Status Rules — Purpose: Computes net work duration (minutes) and the final COMPLETED / HALF_DAY status at clock-out.
+// Feature: Automated Working Hours & Status Rules — Purpose: Computes net work duration (minutes), overtime past standard 9h shift span (540m), and COMPLETED / HALF_DAY status.
 // OOP: Stateless Utility Function (Functional Helper) — Connected To: attendance.service.ts clockOut() and attendance-requests.service.ts (approved corrections).
 export function evaluateClockOut(clockInTime: Date, clockOutTime: Date, config: WorkScheduleConfig): ClockOutEvaluation {
   const workDurationMinutes = Math.max(0, Math.floor((clockOutTime.getTime() - clockInTime.getTime()) / 60000));
+  const rawExtraMinutes = Math.max(0, workDurationMinutes - 540);
+  const overtimeMinutes = rawExtraMinutes >= 30 ? rawExtraMinutes : 0;
   return {
     status: workDurationMinutes < config.halfDayThresholdMinutes ? AttendanceStatus.HALF_DAY : AttendanceStatus.COMPLETED,
     workDurationMinutes,
+    overtimeMinutes,
+  };
+}
+
+// Feature: Overtime Payroll Calculation Engine (PP No. 35/2021) — Purpose: Computes hourly base rate (1/173 * baseSalary), weighted multiplier hours (1.5x first hour, 2.0x subsequent), and IDR overtime pay.
+// OOP: Stateless Utility Function (Functional Helper) — Connected To: attendance.service.ts, attendance-requests.service.ts, and export.service.ts.
+export function calculateOvertimeAndPay(overtimeMinutesInput: number, baseSalaryInput = 12000000): OvertimePayCalculation {
+  const overtimeMinutes = Math.max(0, Math.round(overtimeMinutesInput || 0));
+  const baseSalary = Math.max(1000000, Number(baseSalaryInput || 12000000));
+  const hourlyBaseRate = Math.round(baseSalary / 173);
+
+  if (overtimeMinutes < 30) {
+    return {
+      overtimeMinutes: 0,
+      overtimeHoursRaw: 0,
+      overtimeMultiplierHours: 0,
+      hourlyBaseRate,
+      overtimePayAmount: 0,
+    };
+  }
+
+  const overtimeHoursRaw = Number((overtimeMinutes / 60).toFixed(2));
+  const firstHourPart = Math.min(1, overtimeMinutes / 60);
+  const subsequentHoursPart = Math.max(0, overtimeMinutes / 60 - 1);
+  const overtimeMultiplierHours = Number((firstHourPart * 1.5 + subsequentHoursPart * 2.0).toFixed(2));
+  const overtimePayAmount = Math.round(overtimeMultiplierHours * hourlyBaseRate);
+
+  return {
+    overtimeMinutes,
+    overtimeHoursRaw,
+    overtimeMultiplierHours,
+    hourlyBaseRate,
+    overtimePayAmount,
+  };
+}
+
+// Feature: Weekly WFH Quota Window Calculator — Purpose: Computes the Monday-to-Sunday ISO calendar week range (YYYY-MM-DD) for any target date to enforce 1-day/week WFH quota.
+// OOP: Stateless Utility Function (Functional Helper) — Connected To: attendance-requests.service.ts and attendance.service.ts.
+export function getIsoWeekRange(dateStr: string): { weekStart: string; weekEnd: string } {
+  const [y, m, d] = dateStr.split('-').map((n) => Number(n));
+  const dt = new Date(Date.UTC(y, (m || 1) - 1, d || 1));
+  const dayOfWeek = dt.getUTCDay(); // 0 = Sun, 1 = Mon, ... 6 = Sat
+  const diffToMonday = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+
+  const monday = new Date(dt);
+  monday.setUTCDate(dt.getUTCDate() + diffToMonday);
+
+  const sunday = new Date(monday);
+  sunday.setUTCDate(monday.getUTCDate() + 6);
+
+  const fmt = (val: Date) => val.toISOString().slice(0, 10);
+  return {
+    weekStart: fmt(monday),
+    weekEnd: fmt(sunday),
   };
 }
 
