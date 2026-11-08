@@ -10,7 +10,7 @@ export const EMPLOYEE_SERVICE = 'EMPLOYEE_SERVICE';
 export const ATTENDANCE_SERVICE = 'ATTENDANCE_SERVICE';
 
 // Feature: Microservice TCP Message Patterns — Purpose: TCP message patterns for the Employee & Auth microservice (port 3001).
-// OOP: Stateless Utility Function (Functional Helper) — Connected To: backend/apps/employee-service/src/**/*.controller.ts (@MessagePattern) <->.
+// OOP: Stateless Utility Function (Functional Helper) — Connected To: backend/apps/employee-service/src/**/*.controller.ts (@MessagePattern).
 export const AUTH_PATTERNS = {
   LOGIN: { cmd: 'auth.login' },
   REFRESH: { cmd: 'auth.refresh' },
@@ -31,6 +31,7 @@ export const EMPLOYEE_PATTERNS = {
   SOFT_DELETE: { cmd: 'employee.soft_delete' },
   RESTORE: { cmd: 'employee.restore' },
   DEPARTMENTS: { cmd: 'employee.departments' },
+  DEPARTMENT_DIRECTORY: { cmd: 'employee.department_directory' },
   RESEND_VERIFICATION: { cmd: 'employee.resend_verification' },
 } as const;
 
@@ -47,7 +48,7 @@ export const SUPPORT_PATTERNS = {
 } as const;
 
 // Feature: Microservice TCP Message Patterns — Purpose: TCP message patterns for the Attendance microservice (port 3002).
-// OOP: Stateless Utility Function (Functional Helper) — Connected To: backend/apps/attendance-service/src/**/*.controller.ts <->.
+// OOP: Stateless Utility Function (Functional Helper) — Connected To: backend/apps/attendance-service/src/**/*.controller.ts.
 export const ATTENDANCE_PATTERNS = {
   CLOCK_IN: { cmd: 'attendance.clock_in' },
   CLOCK_OUT: { cmd: 'attendance.clock_out' },
@@ -58,6 +59,8 @@ export const ATTENDANCE_PATTERNS = {
   FIND_ONE: { cmd: 'attendance.find_one' },
   SUMMARY: { cmd: 'attendance.summary' },
   EXPORT: { cmd: 'attendance.export' },
+  GET_POLICY: { cmd: 'attendance.get_policy' },
+  UPDATE_POLICY: { cmd: 'attendance.update_policy' },
 } as const;
 
 export const ATTENDANCE_REQUEST_PATTERNS = {
