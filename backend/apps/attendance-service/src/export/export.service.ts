@@ -16,7 +16,7 @@ import {
 } from '@app/common';
 import { AttendanceService } from '../attendance/attendance.service';
 
-// Feature: Data Export & Payroll Reporting — Purpose: Generates payroll-ready Excel (`.xlsx`) and CSV (`.csv`) attendance reports using `exceljs`.
+// Feature: Data Export & Payroll Reporting — Purpose: Generates payroll-ready Excel (`.xlsx`) and CSV (`.csv`) attendance reports including Overtime (Lembur) pay using `exceljs`.
 // OOP: Injectable Domain Service (Business Logic Encapsulation) — Connected To: AttendanceServiceController (@MessagePattern ATTENDANCE_PATTERNS.EXPORT) -> api-gateway.
 @Injectable()
 export class ExportService {
@@ -35,7 +35,7 @@ export class ExportService {
     workbook.creator = 'Abdurrahman Khairi — Dexa Group WFH Monitoring System';
     workbook.created = new Date();
 
-    const sheet = workbook.addWorksheet('WFH Attendance Recap');
+    const sheet = workbook.addWorksheet('WFH Attendance & Payroll Recap');
 
     sheet.columns = [
       { header: 'No', key: 'no', width: 6 },
@@ -45,10 +45,15 @@ export class ExportService {
       { header: 'Email', key: 'email', width: 28 },
       { header: 'Department', key: 'department', width: 24 },
       { header: 'Position', key: 'position', width: 24 },
+      { header: 'Base Salary (IDR)', key: 'baseSalary', width: 18 },
       { header: 'Clock-In (WIB)', key: 'clockIn', width: 22 },
       { header: 'Clock-Out (WIB)', key: 'clockOut', width: 22 },
       { header: 'Duration (Mins)', key: 'durationMins', width: 16 },
       { header: 'Duration (Hrs)', key: 'durationHours', width: 15 },
+      { header: 'Overtime (Mins)', key: 'overtimeMins', width: 16 },
+      { header: 'OT Multiplier (Hrs)', key: 'overtimeMult', width: 18 },
+      { header: 'Overtime Pay (IDR)', key: 'overtimePay', width: 20 },
+      { header: 'WFH Approved', key: 'wfhApproved', width: 15 },
       { header: 'Late (Mins)', key: 'lateMins', width: 13 },
       { header: 'Status', key: 'status', width: 18 },
       { header: 'Photo Source', key: 'captureSource', width: 16 },
@@ -57,7 +62,6 @@ export class ExportService {
       { header: 'Daily Accomplishment (Clock-Out Notes)', key: 'dailyAccomplishment', width: 42 },
     ];
 
-    // Style header row in Corporate Blue
     const headerRow = sheet.getRow(1);
     headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 11 };
     headerRow.fill = {
@@ -71,6 +75,7 @@ export class ExportService {
     rows.forEach((att, idx) => {
       const mins = att.workDurationMinutes ?? 0;
       const hrsFormatted = mins > 0 ? `${(mins / 60).toFixed(2)} hrs` : '-';
+      const baseSalary = Number(att.employee?.baseSalary ?? 12000000);
       sheet.addRow({
         no: idx + 1,
         date: att.attendanceDate,
@@ -79,10 +84,15 @@ export class ExportService {
         email: att.employee?.email ?? '-',
         department: att.employee?.department ?? '-',
         position: att.employee?.position ?? '-',
+        baseSalary,
         clockIn: formatJakartaDateTime(att.clockInTime),
         clockOut: formatJakartaDateTime(att.clockOutTime),
         durationMins: att.workDurationMinutes ?? 0,
         durationHours: hrsFormatted,
+        overtimeMins: att.overtimeMinutes ?? 0,
+        overtimeMult: Number(att.overtimeMultiplierHours ?? 0),
+        overtimePay: Number(att.overtimePayAmount ?? 0),
+        wfhApproved: att.wfhApproved ? 'APPROVED (1x/Wk)' : 'STANDARD',
         lateMins: att.lateMinutes ?? 0,
         status: att.status,
         captureSource: att.photoCaptureSource ?? '-',
@@ -104,12 +114,12 @@ export class ExportService {
     const mimeType = isCsv
       ? 'text/csv; charset=utf-8'
       : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
-    const fileName = `Dexa_WFH_Attendance_Report_${dateStamp}.${ext}`;
+    const fileName = `Dexa_WFH_Attendance_Payroll_Report_${dateStamp}.${ext}`;
 
     return buildResponse({
       where,
-      what: `Exported ${rows.length} attendance record(s) to .${ext.toUpperCase()}`,
-      why: `Generated payroll-ready ${ext.toUpperCase()} file (${fileName}) with working duration, status, and photo verification flags.`,
+      what: `Exported ${rows.length} attendance & payroll record(s) to .${ext.toUpperCase()}`,
+      why: `Generated payroll-ready ${ext.toUpperCase()} file (${fileName}) with working duration, overtime pay (IDR), and photo verification flags.`,
       data: {
         fileName,
         mimeType,

@@ -9,6 +9,7 @@ import * as bcrypt from 'bcryptjs';
 import { DataSource, Repository } from 'typeorm';
 import {
   CreateEmployeePayload,
+  Department,
   Employee,
   EmployeeQueryPayload,
   EmployeeStatus,
@@ -26,7 +27,7 @@ import {
 import { OtpService } from '../auth/otp.service';
 import { MailService } from '../mail/mail.service';
 
-// Feature: Master Employee Management — Purpose: Implements Master Employee Management (Create, Read, Update, Soft Delete & Restore) and syncs with the `users` table.
+// Feature: Master Employee Management — Purpose: Implements Master Employee Management (Create, Read, Update, Soft Delete & Restore) and syncs with `users` and `departments`.
 // OOP: Injectable Domain Service (Business Logic Encapsulation) — Connected To: Exposed via EmployeesController (@MessagePattern EMPLOYEE_PATTERNS) -> Consumed by api-gateway.
 @Injectable()
 export class EmployeesService {
@@ -35,6 +36,8 @@ export class EmployeesService {
     private readonly employeeRepo: Repository<Employee>,
     @InjectRepository(User)
     private readonly userRepo: Repository<User>,
+    @InjectRepository(Department)
+    private readonly departmentRepo: Repository<Department>,
     private readonly dataSource: DataSource,
     private readonly otpService: OtpService,
     private readonly mailService: MailService,
@@ -50,6 +53,7 @@ export class EmployeesService {
     const qb = this.employeeRepo
       .createQueryBuilder('employee')
       .leftJoinAndSelect('employee.user', 'user')
+      .leftJoinAndSelect('employee.departmentRef', 'departmentRef')
       .orderBy('employee.createdAt', 'DESC');
 
     if (query.includeInactive) {
@@ -93,13 +97,13 @@ export class EmployeesService {
     });
   }
 
-  // Feature: Master Employee Management — Purpose: Retrieves a single employee record by ID including account role and verification status.
+  // Feature: Master Employee Management — Purpose: Retrieves a single employee record by ID including account role, department manager email, and base salary.
   // OOP: Domain Service Method (Encapsulated Business Operation) — Connected To: GET /api/employees/:id -> frontend MasterEmployeesPage.tsx.
   async findOne(payload: IdActorPayload): Promise<StandardApiResponse> {
     const where = 'Master Employee - Detail';
     const emp = await this.employeeRepo.findOne({
       where: { id: payload.id },
-      relations: ['user'],
+      relations: ['user', 'departmentRef'],
       withDeleted: true,
     });
 
@@ -140,6 +144,10 @@ export class EmployeesService {
       throwRpcError(409, where, 'Duplicate employee code (NIP)', `Employee code "${employeeCode}" is already assigned to ${existingCode.fullName}.`);
     }
 
+    const departmentName = dto.department.trim();
+    const matchedDept = await this.departmentRepo.findOne({ where: { name: departmentName } });
+    const baseSalary = dto.baseSalary && dto.baseSalary >= 1000000 ? Math.round(dto.baseSalary) : 12000000;
+
     const tempPasswordHash = await bcrypt.hash(`DexaTemp#${Math.random().toString(36).slice(2, 10)}`, 10);
     const assignedRole = dto.role ?? UserRole.EMPLOYEE;
 
@@ -158,15 +166,18 @@ export class EmployeesService {
         employeeCode,
         fullName: dto.fullName.trim(),
         email,
-        department: dto.department.trim(),
+        department: departmentName,
+        departmentId: matchedDept?.id ?? null,
         position: dto.position.trim(),
         phoneNumber: dto.phoneNumber ?? null,
         joinDate: dto.joinDate,
+        baseSalary,
         status: EmployeeStatus.ACTIVE,
         isActive: true,
       });
       const createdEmployee = await manager.save(Employee, employee);
       createdEmployee.user = createdUser;
+      createdEmployee.departmentRef = matchedDept ?? null;
       return { savedUser: createdUser, savedEmployee: createdEmployee };
     });
 
@@ -197,7 +208,7 @@ export class EmployeesService {
     });
   }
 
-  // Feature: Master Employee Management — Purpose: Updates an employee's master data (name, NIP, email, department, position, status, or RBAC role) and syncs with `users`.
+  // Feature: Master Employee Management — Purpose: Updates an employee's master data (name, NIP, email, department, baseSalary, position, status, or RBAC role) and syncs with `users`.
   // OOP: Domain Service Method (Encapsulated Business Operation) — Connected To: PATCH /api/employees/:id -> frontend MasterEmployeesPage.tsx.
   async update(payload: UpdateEmployeePayload): Promise<StandardApiResponse> {
     const where = 'Master Employee - Update';
@@ -205,7 +216,7 @@ export class EmployeesService {
 
     const employee = await this.employeeRepo.findOne({
       where: { id },
-      relations: ['user'],
+      relations: ['user', 'departmentRef'],
       withDeleted: true,
     });
     if (!employee || !employee.user) {
@@ -232,16 +243,23 @@ export class EmployeesService {
     }
 
     if (dto.fullName !== undefined) employee.fullName = dto.fullName.trim();
-    if (dto.department !== undefined) employee.department = dto.department.trim();
+    if (dto.department !== undefined) {
+      employee.department = dto.department.trim();
+      const matchedDept = await this.departmentRepo.findOne({ where: { name: employee.department } });
+      employee.departmentId = matchedDept?.id ?? null;
+      employee.departmentRef = matchedDept ?? null;
+    }
     if (dto.position !== undefined) employee.position = dto.position.trim();
     if (dto.phoneNumber !== undefined) employee.phoneNumber = dto.phoneNumber ?? null;
     if (dto.joinDate !== undefined) employee.joinDate = dto.joinDate;
+    if (dto.baseSalary !== undefined && dto.baseSalary >= 1000000) employee.baseSalary = Math.round(dto.baseSalary);
     if (dto.status !== undefined) employee.status = dto.status;
     if (dto.role !== undefined) employee.user.role = dto.role;
 
     await this.userRepo.save(employee.user);
     const updated = await this.employeeRepo.save(employee);
     updated.user = employee.user;
+    updated.departmentRef = employee.departmentRef;
 
     return buildResponse({
       where,
@@ -251,13 +269,13 @@ export class EmployeesService {
     });
   }
 
-  // Feature: Master Employee Soft Deletion — Purpose: Soft-deletes (deactivates) an employee by setting `is_active = false`, `status = INACTIVE`, and `deleted_at = NOW()` so.
+  // Feature: Master Employee Soft Deletion — Purpose: Soft-deletes (deactivates) an employee by setting `is_active = false`, `status = INACTIVE`, and `deleted_at = NOW()`.
   // OOP: Domain Service Method (Encapsulated Business Operation) — Connected To: DELETE /api/employees/:id -> frontend MasterEmployeesPage.tsx.
   async softDelete(payload: IdActorPayload): Promise<StandardApiResponse> {
     const where = 'Master Employee - Soft Delete';
     const employee = await this.employeeRepo.findOne({
       where: { id: payload.id },
-      relations: ['user'],
+      relations: ['user', 'departmentRef'],
       withDeleted: true,
     });
 
@@ -293,7 +311,7 @@ export class EmployeesService {
     const where = 'Master Employee - Restore Account';
     const employee = await this.employeeRepo.findOne({
       where: { id: payload.id },
-      relations: ['user'],
+      relations: ['user', 'departmentRef'],
       withDeleted: true,
     });
 
@@ -336,6 +354,22 @@ export class EmployeesService {
       what: `Loaded ${departments.length} departments`,
       why: 'Retrieved distinct department list from master employee table.',
       data: departments,
+    });
+  }
+
+  // Feature: Master Department Approval Directory — Purpose: Returns full department records including managerName, managerEmail, hrPicEmail, and maxWfhDaysPerWeek.
+  // OOP: Domain Service Method (Encapsulated Business Operation) — Connected To: GET /api/employees/department-directory -> frontend LeaveAndCorrectionModal & MasterEmployeesPage.
+  async getDepartmentDirectory(): Promise<StandardApiResponse> {
+    const items = await this.departmentRepo.find({
+      where: { isActive: true },
+      order: { code: 'ASC' },
+    });
+    return buildResponse({
+      type: 'info',
+      where: 'Master Department - Approval Routing Directory',
+      what: `Loaded ${items.length} department approval routes`,
+      why: 'Retrieved master department directory with Manager emails and weekly WFH quota limits.',
+      data: items,
     });
   }
 
@@ -391,9 +425,10 @@ export class EmployeesService {
     return `DEXA-2026-${String(nextNumber).padStart(3, '0')}`;
   }
 
-  // Feature: Master Employee Management — Purpose: Formats an Employee + User entity pair into a flat, consistent DTO for the frontend.
+  // Feature: Master Employee Management — Purpose: Formats an Employee + User + Department entity triple into a flat, consistent DTO for the frontend.
   // OOP: Domain Service Method (Encapsulated Business Operation) — Connected To: All EmployeesService responses.
   serializeEmployee(emp: Employee) {
+    const baseSalary = Number(emp.baseSalary ?? 12000000);
     return {
       id: emp.id,
       userId: emp.userId,
@@ -401,9 +436,15 @@ export class EmployeesService {
       fullName: emp.fullName,
       email: emp.email,
       department: emp.department,
+      departmentId: emp.departmentId ?? emp.departmentRef?.id ?? null,
+      managerName: emp.departmentRef?.managerName ?? null,
+      managerEmail: emp.departmentRef?.managerEmail ?? null,
+      maxWfhDaysPerWeek: emp.departmentRef?.maxWfhDaysPerWeek ?? 1,
       position: emp.position,
       phoneNumber: emp.phoneNumber,
       joinDate: emp.joinDate,
+      baseSalary,
+      hourlyOvertimeRate: Math.round(baseSalary / 173),
       status: emp.status,
       isActive: emp.isActive,
       avatarUrl: emp.avatarUrl,

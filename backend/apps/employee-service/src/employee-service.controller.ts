@@ -155,6 +155,13 @@ export class EmployeeServiceController {
     return this.employeesService.getDepartments();
   }
 
+  // Feature: Master Department Approval Directory — Purpose: Handles TCP `employee.department_directory` message for Manager email & WFH quota lookup.
+  // OOP: Message Handler (TCP Request Handler) — Connected To: EmployeesService.getDepartmentDirectory() -> GET /api/employees/department-directory.
+  @MessagePattern(EMPLOYEE_PATTERNS.DEPARTMENT_DIRECTORY)
+  getDepartmentDirectory() {
+    return this.employeesService.getDepartmentDirectory();
+  }
+
   // Feature: Core System Architecture — Purpose: Handles TCP `employee.resend_verification` message triggered by HRD Admin.
   // OOP: Message Handler (TCP Request Handler) — Connected To: EmployeesService.resendVerificationByAdmin() -> POST /api/employees/:id/resend-otp.
   @MessagePattern(EMPLOYEE_PATTERNS.RESEND_VERIFICATION)
