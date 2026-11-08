@@ -83,6 +83,8 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
+      mailpit:
+        condition: service_started
       employee-service:
         condition: service_healthy
     environment:
@@ -95,6 +97,9 @@ services:
       DB_SYNCHRONIZE: "false"
       ATTENDANCE_SERVICE_HOST: 0.0.0.0
       ATTENDANCE_SERVICE_PORT: 3002
+      SMTP_HOST: mailpit
+      SMTP_PORT: 1025
+      SMTP_SECURE: "false"
       WORK_START_TIME: ${WORK_START_TIME:-08:30}
       LATE_GRACE_MINUTES: ${LATE_GRACE_MINUTES:-15}
       HALF_DAY_THRESHOLD_MINUTES: ${HALF_DAY_THRESHOLD_MINUTES:-240}
