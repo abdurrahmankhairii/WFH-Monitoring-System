@@ -60,6 +60,13 @@ export class CreateEmployeeDto {
 
   @EmptyToUndefined()
   @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1000000)
+  baseSalary?: number;
+
+  @EmptyToUndefined()
+  @IsOptional()
   @Matches(/^[0-9+\-\s]{8,30}$/, { message: 'Phone number may only contain digits, spaces, + and -' })
   phoneNumber?: string;
 
