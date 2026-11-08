@@ -44,6 +44,14 @@ export class EmployeesController {
     return sendRpc(this.employeeClient, EMPLOYEE_PATTERNS.DEPARTMENTS, {});
   }
 
+  // Feature: Master Department Approval Directory — Purpose: Returns full department records including Manager email, HRD PIC email, and weekly WFH quota.
+  // OOP: Controller Action (HTTP Request Handler) — Connected To: TCP `employee.department_directory` -> frontend LeaveAndCorrectionModal & MasterEmployeesPage.
+  @Get('employees/department-directory')
+  @ApiOperation({ summary: 'Get master department directory with Manager emails and weekly WFH quota' })
+  getDepartmentDirectory() {
+    return sendRpc(this.employeeClient, EMPLOYEE_PATTERNS.DEPARTMENT_DIRECTORY, {});
+  }
+
   // Feature: Master Employee Management — Purpose: Lists master employee records with pagination, search, and filters (restricted to HR_ADMIN).
   // OOP: Controller Action (HTTP Request Handler) — Connected To: TCP `employee.find_all` -> frontend MasterEmployeesPage.tsx.
   @Get('employees')
