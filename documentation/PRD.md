@@ -37,14 +37,13 @@ To protect the author's intellectual property during technical assessment evalua
 3. **UI Footer & README Watermark:** Every screen/page in the React application and the bottom of `README.md` visibly displays:
    > **© 2026 Abdurrahman Khairi - Created strictly for Technical Assessment evaluation. Unauthorized commercial use is prohibited**
 
-### 2.2. Clean Code, Maximum Optimization & Structured `//` Function Comments
-1. **Clean, Optimal Code:** SOLID & DRY design, strict TypeScript types (zero `any`), indexed SQL queries, and clean browser resource disposal (stopping webcam `MediaStream` tracks and revoking object URLs on unmount).
-2. **Mandatory Structured `//` Comment on Every Function & Component:**
-   Every function, method, endpoint, custom hook, and UI component **MUST** include a 3-part `//` comment header:
+### 2.2. Clean Code, OOP Architecture & Mandatory 2-Line `//` Function Comments
+1. **Clean Code & OOP Architecture:** Strict Object-Oriented Programming (OOP) and SOLID design principles: Encapsulation (private/readonly members), Polymorphism (interface implementation), and Abstraction across Controller, Service, and Repository layers.
+2. **Mandatory 2-Line Structured `//` Comment Standard (STRICTLY Exactly 2 Lines — Zero AI Slop):**
+   Every class, method, endpoint, custom hook, and UI component **MUST** include a clean, human-crafted 2-line `//` comment block:
    ```typescript
-   // [Purpose]: Brief description of what this function/component does and why.
-   // [Connected To]: Exact file paths, API endpoints, TCP message patterns, or DB entities it connects to.
-   // [Feature]: Which core feature (#1 - #10) this code implements.
+   // Feature: <Feature Name> — Purpose: <Direct statement of what it does and why>.
+   // OOP: <Pattern/Principle/Role> — Connected To: <Exact file path(s), API endpoint(s), or DB entity>.
    ```
 
 ### 2.3. Mandatory Git Commit, Branching & Push Restrictions
@@ -192,6 +191,7 @@ To protect the author's intellectual property during technical assessment evalua
 ```mermaid
 erDiagram
     USERS ||--o| EMPLOYEES : "1-to-1"
+    DEPARTMENTS ||--o{ EMPLOYEES : "has"
     USERS ||--o{ OTP_CODES : "has"
     USERS ||--o{ ACCESS_REQUESTS : "reviews"
     USERS ||--o{ SUPPORT_TICKETS : "sends"
@@ -210,15 +210,27 @@ erDiagram
         datetime updated_at
     }
 
+    DEPARTMENTS {
+        uuid id PK
+        varchar code UK
+        varchar name UK
+        varchar manager_name
+        varchar manager_email
+        varchar hr_pic_email
+        int max_wfh_days_per_week
+        boolean is_active
+    }
+
     EMPLOYEES {
         uuid id PK
         uuid user_id FK
+        uuid department_id FK
         varchar employee_code UK "Strictly mandatory NIP"
-
         varchar full_name
         varchar email UK "Synced with users.email"
         varchar department
         varchar position
+        bigint base_salary "Overtime rate basis"
         varchar phone_number
         date join_date
         enum status "ACTIVE | INACTIVE | ON_LEAVE"
@@ -236,6 +248,10 @@ erDiagram
         datetime clock_in_time "Server Timestamp"
         datetime clock_out_time "Server Timestamp"
         int work_duration_minutes
+        int overtime_minutes
+        decimal overtime_multiplier_hours
+        decimal overtime_pay_amount
+        boolean wfh_approved "Hybrid 1x/wk quota"
         varchar clock_in_photo_url
         varchar clock_out_photo_url
         datetime clock_in_photo_captured_at "Webcam/EXIF Timestamp"
@@ -254,10 +270,15 @@ erDiagram
     ATTENDANCE_REQUESTS {
         uuid id PK
         uuid employee_id FK
-        enum request_type "LEAVE | SICK | CORRECTION"
+        enum request_type "WFH_APPROVAL | OVERTIME | LEAVE | SICK | CORRECTION"
         date target_date
         datetime requested_clock_in
         datetime requested_clock_out
+        int overtime_minutes
+        decimal estimated_overtime_pay
+        varchar manager_email
+        varchar cc_emails
+        boolean email_dispatched
         text reason
         varchar attachment_url
         enum status "PENDING | APPROVED | REJECTED"
