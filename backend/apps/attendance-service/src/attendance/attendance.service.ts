@@ -5,7 +5,7 @@
 // ============================================================================
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Brackets, LessThan, In, IsNull, Repository } from 'typeorm';
+import { Brackets, In, IsNull, LessThan, Repository } from 'typeorm';
 import {
   AccessRequest,
   ActorPayload,
@@ -13,19 +13,27 @@ import {
   Attendance,
   AttendanceQueryPayload,
   AttendanceRequest,
+  AttendanceRequestType,
   AttendanceStatus,
   ClockInPayload,
   ClockOutPayload,
+  Department,
   Employee,
   IdActorPayload,
   MyHistoryPayload,
   StandardApiResponse,
   SummaryPayload,
+  SystemSetting,
+  UpdatePolicyPayload,
+  UserRole,
+  WfhWorkflowMode,
   buildPaginationMeta,
   buildResponse,
+  calculateOvertimeAndPay,
   evaluateClockIn,
   evaluateClockOut,
   formatJakartaDateTime,
+  getIsoWeekRange,
   getWorkScheduleConfig,
   resolvePagination,
   shiftDateString,
@@ -35,7 +43,7 @@ import {
   verifyPhotoTimestamp,
 } from '@app/common';
 
-// Feature: WFH Attendance Monitoring & Self-Service — Purpose: Core WFH Attendance engine handling server-timed Clock-In/Out, photo timestamp verification, automated status/duration.
+// Feature: WFH Attendance Monitoring & Self-Service — Purpose: Core WFH Attendance engine handling server-timed Clock-In/Out, photo verification, weekly WFH quota, and overtime payroll calculation.
 // OOP: Injectable Domain Service (Business Logic Encapsulation) — Connected To: AttendanceServiceController (@MessagePattern ATTENDANCE_PATTERNS) -> api-gateway AttendanceController.
 @Injectable()
 export class AttendanceService {
@@ -44,13 +52,17 @@ export class AttendanceService {
     private readonly attendanceRepo: Repository<Attendance>,
     @InjectRepository(Employee)
     private readonly employeeRepo: Repository<Employee>,
+    @InjectRepository(Department)
+    private readonly departmentRepo: Repository<Department>,
     @InjectRepository(AttendanceRequest)
     private readonly attendanceReqRepo: Repository<AttendanceRequest>,
     @InjectRepository(AccessRequest)
     private readonly accessReqRepo: Repository<AccessRequest>,
+    @InjectRepository(SystemSetting)
+    private readonly systemSettingRepo: Repository<SystemSetting>,
   ) {}
 
-  // Feature: WFH Attendance Clock-In — Purpose: Records an employee's WFH Clock-In using the authoritative backend server timestamp (`new Date()`), verifies the photo.
+  // Feature: WFH Attendance Clock-In — Purpose: Records an employee's WFH Clock-In using the authoritative backend server timestamp (`new Date()`), verifies photo proof, and checks WFH approval.
   // OOP: Domain Service Method (Encapsulated Business Operation) — Connected To: POST /api/attendances/clock-in -> frontend/src/pages/employee/EmployeeAttendancePage.tsx.
   async clockIn(payload: ClockInPayload): Promise<StandardApiResponse> {
     const where = 'WFH Attendance - Clock In';
@@ -73,6 +85,57 @@ export class AttendanceService {
       );
     }
 
+    const policy = await this.getSystemPolicy();
+    const dept = await this.departmentRepo.findOne({ where: { name: employee.department } });
+    const wfhWorkflowMode = policy.wfhWorkflowMode ?? dept?.wfhWorkflowMode ?? WfhWorkflowMode.STRICT_APPROVAL;
+
+    const approvedWfhReq = await this.attendanceReqRepo.findOne({
+      where: {
+        employeeId: employee.id,
+        requestType: AttendanceRequestType.WFH_APPROVAL,
+        targetDate: todayDate,
+        status: ApprovalStatus.APPROVED,
+      },
+    });
+
+    const isSystemAdmin = payload.actor.role === UserRole.SYSTEM_ADMIN;
+
+    if (!isSystemAdmin && !approvedWfhReq) {
+      if (wfhWorkflowMode === WfhWorkflowMode.NOTICE_ONLY) {
+        throwRpcError(
+          403,
+          where,
+          'WFH Notice required before Clock-In',
+          `Under Dexa's Notice-Only WFH policy, you must dispatch a WFH Notification Email to your Department Manager first using the 'Send WFH Notice' button before Clocking In.`,
+        );
+      }
+
+      const pendingWfhReq = await this.attendanceReqRepo.findOne({
+        where: {
+          employeeId: employee.id,
+          requestType: AttendanceRequestType.WFH_APPROVAL,
+          targetDate: todayDate,
+          status: ApprovalStatus.PENDING,
+        },
+      });
+
+      if (pendingWfhReq) {
+        throwRpcError(
+          403,
+          where,
+          'WFH Clock-In requires approved request',
+          `Your WFH Approval request for today (${todayDate}) is currently PENDING review by your Department Manager (${employee.department}). Clock-In is locked until the request is approved.`,
+        );
+      }
+
+      throwRpcError(
+        403,
+        where,
+        'Scheduled as Work From Office (WFO)',
+        `Dexa Group operates on a Work From Office (WFO) base schedule. Clock-In on the WFH Portal is only permitted when you have an APPROVED WFH request for today (1 day/week quota) from your Department Manager.`,
+      );
+    }
+
     const parsedCapturedAt = payload.photo.photoCapturedAt ? new Date(payload.photo.photoCapturedAt) : serverNow;
     const isVerified = verifyPhotoTimestamp({
       source: payload.photo.captureSource,
@@ -92,6 +155,7 @@ export class AttendanceService {
     attendance.dailyPlan = payload.dailyPlan;
     attendance.status = evalResult.status;
     attendance.lateMinutes = evalResult.lateMinutes;
+    attendance.wfhApproved = true;
     attendance.ipAddress = payload.ipAddress;
     attendance.deviceInfo = payload.deviceInfo;
 
@@ -112,7 +176,7 @@ export class AttendanceService {
     });
   }
 
-  // Feature: WFH Attendance Clock-Out — Purpose: Records an employee's WFH Clock-Out using the authoritative backend server timestamp, requires the mandatory daily.
+  // Feature: WFH Attendance Clock-Out & Overtime Calculation — Purpose: Records Clock-Out, computes net working minutes, and calculates Overtime Pay (IDR) using Kemenaker PP 35/2021 (1/173 * 1.5x/2.0x).
   // OOP: Domain Service Method (Encapsulated Business Operation) — Connected To: POST /api/attendances/clock-out -> frontend/src/pages/employee/EmployeeAttendancePage.tsx.
   async clockOut(payload: ClockOutPayload): Promise<StandardApiResponse> {
     const where = 'WFH Attendance - Clock Out';
@@ -152,7 +216,14 @@ export class AttendanceService {
       serverNow,
     });
 
+    const policy = await this.getSystemPolicy();
+    const dept = await this.departmentRepo.findOne({ where: { name: employee.department } });
+    const enableOvertime = policy.enableOvertime ?? dept?.enableOvertime ?? true;
+
     const evalOut = evaluateClockOut(record.clockInTime, serverNow, schedule);
+    const otCalc = enableOvertime
+      ? calculateOvertimeAndPay(evalOut.overtimeMinutes, Number(employee.baseSalary ?? 12000000))
+      : { overtimeMinutes: 0, overtimeMultiplierHours: 0, overtimePayAmount: 0 };
 
     record.clockOutTime = serverNow;
     record.clockOutPhotoUrl = payload.photo.photoUrl;
@@ -162,22 +233,29 @@ export class AttendanceService {
     record.dailyAccomplishment = payload.dailyAccomplishment;
     record.workDurationMinutes = evalOut.workDurationMinutes;
     record.status = evalOut.status;
+    record.overtimeMinutes = enableOvertime ? Math.max(record.overtimeMinutes ?? 0, otCalc.overtimeMinutes) : 0;
+    record.overtimeMultiplierHours = enableOvertime ? Math.max(Number(record.overtimeMultiplierHours ?? 0), otCalc.overtimeMultiplierHours) : 0;
+    record.overtimePayAmount = enableOvertime ? Math.max(Number(record.overtimePayAmount ?? 0), otCalc.overtimePayAmount) : 0;
 
     const saved = await this.attendanceRepo.save(record);
     saved.employee = employee;
 
     const hours = Math.floor(evalOut.workDurationMinutes / 60);
     const mins = evalOut.workDurationMinutes % 60;
+    const otSuffix =
+      saved.overtimeMinutes > 0
+        ? ` + ${saved.overtimeMinutes}m Overtime (IDR ${Number(saved.overtimePayAmount).toLocaleString('id-ID')})`
+        : '';
 
     return buildResponse({
       where,
       what: `Clock-Out recorded at ${toJakartaTimeString(serverNow)} WIB (${evalOut.status})`,
-      why: `Logged ${hours}h ${mins}m (${evalOut.workDurationMinutes} mins) of WFH work along with your daily accomplishment summary and watermarked photo proof.`,
+      why: `Logged ${hours}h ${mins}m (${evalOut.workDurationMinutes} mins)${otSuffix} along with your daily accomplishment summary and watermarked photo proof.`,
       data: saved,
     });
   }
 
-  // Feature: Real-Time Attendance Status — Purpose: Returns the authenticated employee's attendance status for today along with authoritative server time and schedule config.
+  // Feature: Real-Time Attendance Status & Weekly WFH Quota — Purpose: Returns today's attendance status, server clock, department manager routing, and weekly WFH quota usage.
   // OOP: Domain Service Method (Encapsulated Business Operation) — Connected To: GET /api/attendances/today -> frontend EmployeeAttendancePage.tsx & LiveServerClock.tsx.
   async getTodayStatus(payload: ActorPayload): Promise<StandardApiResponse> {
     const where = 'WFH Attendance - Today Status';
@@ -192,6 +270,7 @@ export class AttendanceService {
       relations: ['employee'],
     });
 
+    const wfhQuota = await this.resolveWeeklyWfhQuota(employee, todayDate);
     const schedule = getWorkScheduleConfig();
 
     return buildResponse({
@@ -210,11 +289,12 @@ export class AttendanceService {
         schedule,
         employee,
         todayAttendance: todayRecord,
+        wfhQuota,
       },
     });
   }
 
-  // Feature: Personal Attendance History — Purpose: Retrieves paginated personal attendance history and summary counters for the signed-in employee.
+  // Feature: Personal Attendance History — Purpose: Retrieves paginated personal attendance history and summary counters (including overtime pay) for the signed-in employee.
   // OOP: Domain Service Method (Encapsulated Business Operation) — Connected To: GET /api/attendances/my-history -> frontend/src/pages/employee/MyAttendanceHistoryPage.tsx.
   async getMyHistory(payload: MyHistoryPayload): Promise<StandardApiResponse> {
     const where = 'WFH Attendance - My History';
@@ -248,13 +328,15 @@ export class AttendanceService {
       completedDays: allMine.filter((a) => a.status === AttendanceStatus.COMPLETED).length,
       leaveOrSickDays: allMine.filter((a) => a.status === AttendanceStatus.ON_LEAVE || a.status === AttendanceStatus.SICK).length,
       totalMinutesWorked: allMine.reduce((sum, a) => sum + (a.workDurationMinutes ?? 0), 0),
+      totalOvertimeMinutes: allMine.reduce((sum, a) => sum + (a.overtimeMinutes ?? 0), 0),
+      totalOvertimePayAmount: allMine.reduce((sum, a) => sum + Number(a.overtimePayAmount ?? 0), 0),
     };
 
     return buildResponse({
       type: 'info',
       where,
       what: `Loaded ${items.length} of ${total} personal attendance logs`,
-      why: `Displaying WFH attendance history and task summaries for ${employee.fullName} (${employee.employeeCode}).`,
+      why: `Displaying WFH attendance history, overtime pay, and task summaries for ${employee.fullName} (${employee.employeeCode}).`,
       data: {
         items,
         stats,
@@ -263,7 +345,7 @@ export class AttendanceService {
     });
   }
 
-  // Feature: Employee Analytics Dashboard — Purpose: Retrieves comprehensive personal analytics, work duration trends, punctuality scores, today's status, recent attendance.
+  // Feature: Employee Analytics Dashboard — Purpose: Retrieves comprehensive personal analytics, work duration trends, overtime pay KPIs, weekly WFH quota, and recent logs.
   // OOP: Domain Service Method (Encapsulated Business Operation) — Connected To: GET /api/attendances/my-dashboard -> frontend/src/pages/employee/EmployeeDashboardPage.tsx.
   async getMyDashboard(payload: ActorPayload): Promise<StandardApiResponse> {
     const where = 'Employee Dashboard - Personal Insights';
@@ -272,13 +354,12 @@ export class AttendanceService {
     const serverNow = new Date();
     const todayDate = toJakartaDateString(serverNow);
     const schedule = getWorkScheduleConfig();
+    const wfhQuota = await this.resolveWeeklyWfhQuota(employee, todayDate);
 
-    // 1. Today's attendance state
     const todayRecord = await this.attendanceRepo.findOne({
       where: { employeeId: employee.id, attendanceDate: todayDate },
     });
 
-    // 2. All personal attendance history (ordered newest first)
     const allRecords = await this.attendanceRepo.find({
       where: { employeeId: employee.id },
       order: { attendanceDate: 'DESC' },
@@ -292,17 +373,20 @@ export class AttendanceService {
       (a) => a.status === AttendanceStatus.ON_LEAVE || a.status === AttendanceStatus.SICK,
     ).length;
     const totalMinutesWorked = allRecords.reduce((sum, a) => sum + (a.workDurationMinutes ?? 0), 0);
+    const totalOvertimeMinutes = allRecords.reduce((sum, a) => sum + (a.overtimeMinutes ?? 0), 0);
+    const totalOvertimePayAmount = allRecords.reduce((sum, a) => sum + Number(a.overtimePayAmount ?? 0), 0);
     const averageDailyMinutes = totalDaysLogged > 0 ? Math.round(totalMinutesWorked / totalDaysLogged) : 0;
     const punctualityRatePercent =
       totalDaysLogged > 0 ? Math.round((onTimeDays / totalDaysLogged) * 1000) / 10 : 100;
     const verifiedPhotosCount = allRecords.filter((a) => a.isTimestampVerified).length;
 
-    // 3. 14-day daily duration trend (for interactive bar/area chart)
     const dailyTrend: Array<{
       date: string;
       dayLabel: string;
       durationMinutes: number;
       durationHours: number;
+      overtimeMinutes: number;
+      overtimePayAmount: number;
       targetHours: number;
       isMetTarget: boolean;
       status: AttendanceStatus | 'NOT_LOGGED';
@@ -335,6 +419,8 @@ export class AttendanceService {
         dayLabel,
         durationMinutes,
         durationHours,
+        overtimeMinutes: rec?.overtimeMinutes ?? 0,
+        overtimePayAmount: Number(rec?.overtimePayAmount ?? 0),
         targetHours,
         isMetTarget: durationHours >= targetHours,
         status: rec?.status ?? 'NOT_LOGGED',
@@ -343,7 +429,6 @@ export class AttendanceService {
       });
     }
 
-    // 4. Punctuality and arrival distribution
     const punctualityDistribution = {
       onTimeCount: allRecords.filter((a) => a.lateMinutes === 0 && a.clockInTime !== null).length,
       gracePeriodCount: allRecords.filter((a) => (a.lateMinutes ?? 0) > 0 && (a.lateMinutes ?? 0) <= 15).length,
@@ -351,32 +436,34 @@ export class AttendanceService {
       leaveOrSickCount: leaveOrSickDays,
     };
 
-    // 5. Recent 5 attendance logs
     const recentLogs = allRecords.slice(0, 5);
-
-    // 6. Recent 3 personal requests (Leave, Sick, Correction)
     const recentRequests = await this.attendanceReqRepo.find({
       where: { employeeId: employee.id },
       order: { createdAt: 'DESC' },
-      take: 3,
+      take: 4,
     });
+
+    const baseSalary = Number(employee.baseSalary ?? 12000000);
 
     return buildResponse({
       type: 'info',
       where,
       what: `Loaded individual dashboard analytics for ${employee.fullName}`,
-      why: `Aggregated personal WFH attendance trends, work duration metrics, and shift status for ${employee.fullName} (${employee.employeeCode}).`,
+      why: `Aggregated personal WFH attendance trends, overtime payroll metrics, and weekly WFH quota for ${employee.fullName} (${employee.employeeCode}).`,
       data: {
         serverTimeIso: serverNow.toISOString(),
         todayDate,
         schedule,
         today: todayRecord ?? null,
+        wfhQuota,
         employee: {
           id: employee.id,
           employeeCode: employee.employeeCode,
           fullName: employee.fullName,
           department: employee.department,
           position: employee.position,
+          baseSalary,
+          hourlyOvertimeRate: Math.round(baseSalary / 173),
           avatarUrl: employee.avatarUrl,
         },
         kpi: {
@@ -391,6 +478,8 @@ export class AttendanceService {
           averageDailyHours: Math.round((averageDailyMinutes / 60) * 10) / 10,
           punctualityRatePercent,
           verifiedPhotosCount,
+          totalOvertimeMinutes,
+          totalOvertimePayAmount,
         },
         dailyTrend,
         punctualityDistribution,
@@ -400,7 +489,7 @@ export class AttendanceService {
     });
   }
 
-  // Feature: WFH Attendance Monitoring & Self-Service — Purpose: Retrieves paginated, dynamically filtered attendance logs across all employees for HRD Admin monitoring (view-only control).
+  // Feature: WFH Attendance Monitoring & Self-Service — Purpose: Retrieves paginated, dynamically filtered attendance logs across all employees for HRD Admin monitoring.
   // OOP: Domain Service Method (Encapsulated Business Operation) — Connected To: GET /api/attendances -> frontend/src/pages/hrd/AttendanceMonitoringPage.tsx.
   async findAll(payload: AttendanceQueryPayload): Promise<StandardApiResponse> {
     const where = 'HRD Monitoring - Attendance Audit Log';
@@ -456,7 +545,7 @@ export class AttendanceService {
     });
   }
 
-  // Feature: HRD Real-Time Monitoring Dashboard — Purpose: Computes real-time SQL aggregations (COUNT, GROUP BY department, 7-day trend, verification audit counters) for the HRD Dashboard.
+  // Feature: HRD Real-Time Monitoring Dashboard — Purpose: Computes real-time SQL aggregations (COUNT, GROUP BY department, 7-day trend, overtime payroll totals) for the HRD Dashboard.
   // OOP: Domain Service Method (Encapsulated Business Operation) — Connected To: GET /api/attendances/summary -> frontend/src/pages/hrd/HrdDashboardPage.tsx.
   async getSummary(payload: SummaryPayload): Promise<StandardApiResponse> {
     const where = 'HRD Monitoring - Real-Time Summary';
@@ -487,7 +576,6 @@ export class AttendanceService {
     const unverifiedPhotoCount = presentRecords.filter((a) => !a.isTimestampVerified).length;
     const absentOrNotClockedInCount = Math.max(0, totalActiveEmployees - presentRecords.length - onLeaveOrSickCount);
 
-    // Department aggregation (JOIN + GROUP BY semantics)
     const departmentMap = new Map<
       string,
       { department: string; totalEmployees: number; present: number; onTime: number; late: number; onLeaveOrSick: number }
@@ -529,7 +617,6 @@ export class AttendanceService {
       departmentMap.set(dept, current);
     }
 
-    // 7-day trend
     const startSevenDays = shiftDateString(targetDate, -6);
     const recentRows = await this.attendanceRepo
       .createQueryBuilder('att')
@@ -625,6 +712,114 @@ export class AttendanceService {
     }
 
     return qb;
+  }
+
+  // Feature: Weekly Hybrid WFH Quota Resolver — Purpose: Computes the employee's ISO week (Mon-Sun) WFH usage, remaining days, and department Manager email routing.
+  // OOP: Encapsulated Domain Helper — Connected To: Used by getTodayStatus() and getMyDashboard().
+  async resolveWeeklyWfhQuota(employee: Employee, dateStr: string) {
+    const policy = await this.getSystemPolicy();
+    const dept = await this.departmentRepo.findOne({ where: { name: employee.department } });
+    const maxWfhDaysPerWeek = policy.maxWfhDaysPerWeek ?? dept?.maxWfhDaysPerWeek ?? 1;
+    const wfhWorkflowMode = policy.wfhWorkflowMode ?? dept?.wfhWorkflowMode ?? WfhWorkflowMode.STRICT_APPROVAL;
+    const enableOvertime = policy.enableOvertime ?? dept?.enableOvertime ?? true;
+    const managerName = dept?.managerName ?? 'Ir. Hendra Wijaya, M.Kom';
+    const managerEmail = dept?.managerEmail ?? 'manager.it@dexagroup.com';
+    const hrPicEmail = dept?.hrPicEmail ?? 'admin.hrd@dexagroup.com';
+    const { weekStart, weekEnd } = getIsoWeekRange(dateStr);
+
+    const weekRequests = await this.attendanceReqRepo
+      .createQueryBuilder('req')
+      .where('req.employeeId = :empId', { empId: employee.id })
+      .andWhere('req.requestType = :type', { type: AttendanceRequestType.WFH_APPROVAL })
+      .andWhere('req.status IN (:...statuses)', { statuses: [ApprovalStatus.PENDING, ApprovalStatus.APPROVED] })
+      .andWhere('req.targetDate BETWEEN :weekStart AND :weekEnd', { weekStart, weekEnd })
+      .getMany();
+
+    const usedWfhDaysThisWeek = weekRequests.length;
+    const remainingWfhDaysThisWeek = Math.max(0, maxWfhDaysPerWeek - usedWfhDaysThisWeek);
+
+    const todayWfhReq = await this.attendanceReqRepo.findOne({
+      where: {
+        employeeId: employee.id,
+        requestType: AttendanceRequestType.WFH_APPROVAL,
+        targetDate: dateStr,
+      },
+      order: { createdAt: 'DESC' },
+    });
+
+    const baseSalary = Number(employee.baseSalary ?? 12000000);
+    return {
+      weekStart,
+      weekEnd,
+      maxWfhDaysPerWeek,
+      usedWfhDaysThisWeek,
+      remainingWfhDaysThisWeek,
+      todayWfhStatus: todayWfhReq?.status ?? null,
+      todayWfhRequestId: todayWfhReq?.id ?? null,
+      isWfhApproved: todayWfhReq?.status === ApprovalStatus.APPROVED,
+      wfhWorkflowMode,
+      enableOvertime,
+      managerName,
+      managerEmail,
+      hrPicEmail,
+      baseSalary,
+      hourlyOvertimeRate: enableOvertime ? Math.round(baseSalary / 173) : 0,
+    };
+  }
+
+  // Feature: Company Policy & Workflow Configuration — Purpose: Retrieves the singleton system policy (WFH workflow mode, overtime toggle, weekly quota) or initializes default values.
+  // OOP: Domain Service Method (Encapsulated Business Operation) — Connected To: GET /api/system/policy and resolveWeeklyWfhQuota().
+  async getSystemPolicy(): Promise<SystemSetting> {
+    let setting = await this.systemSettingRepo.findOne({ where: { id: 'DEFAULT' } });
+    if (!setting) {
+      setting = this.systemSettingRepo.create({
+        id: 'DEFAULT',
+        wfhWorkflowMode: WfhWorkflowMode.STRICT_APPROVAL,
+        enableOvertime: true,
+        maxWfhDaysPerWeek: 1,
+        updatedByEmail: 'sysadmin@dexagroup.com',
+      });
+      setting = await this.systemSettingRepo.save(setting);
+    }
+    return setting;
+  }
+
+  // Feature: Company Policy & Workflow Configuration — Purpose: Updates enterprise WFH approval workflow mode (Strict Approval vs Notice Only) and Overtime Pay calculation toggle.
+  // OOP: Domain Service Method (Encapsulated Business Operation) — Connected To: PATCH /api/system/policy -> api-gateway system.controller.ts.
+  async updateSystemPolicy(payload: UpdatePolicyPayload): Promise<StandardApiResponse> {
+    const where = 'System Policy - Configure';
+    if (payload.actor.role !== UserRole.HR_ADMIN && payload.actor.role !== UserRole.SYSTEM_ADMIN) {
+      throwRpcError(403, where, 'Unauthorized configuration attempt', 'Only HR Admin and System Admin can update company policies.');
+    }
+
+    const setting = await this.getSystemPolicy();
+    const deptUpdate: Partial<Department> = {};
+
+    if (payload.dto.wfhWorkflowMode) {
+      setting.wfhWorkflowMode = payload.dto.wfhWorkflowMode;
+      deptUpdate.wfhWorkflowMode = payload.dto.wfhWorkflowMode;
+    }
+    if (typeof payload.dto.enableOvertime === 'boolean') {
+      setting.enableOvertime = payload.dto.enableOvertime;
+      deptUpdate.enableOvertime = payload.dto.enableOvertime;
+    }
+    if (typeof payload.dto.maxWfhDaysPerWeek === 'number') {
+      setting.maxWfhDaysPerWeek = payload.dto.maxWfhDaysPerWeek;
+      deptUpdate.maxWfhDaysPerWeek = payload.dto.maxWfhDaysPerWeek;
+    }
+    setting.updatedByEmail = payload.actor.email ?? 'admin@dexagroup.com';
+    const saved = await this.systemSettingRepo.save(setting);
+
+    if (Object.keys(deptUpdate).length > 0) {
+      await this.departmentRepo.createQueryBuilder().update(Department).set(deptUpdate).execute();
+    }
+
+    return buildResponse({
+      where,
+      what: 'Company Policy updated',
+      why: `Updated WFH Workflow Mode to ${saved.wfhWorkflowMode} and Overtime Calculation to ${saved.enableOvertime ? 'Enabled' : 'Disabled'}.`,
+      data: saved,
+    });
   }
 
   // Feature: WFH Attendance Monitoring & Self-Service — Purpose: Resolves the active Employee record for the authenticated user, throwing a clear 404/403 if missing or deactivated.
