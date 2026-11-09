@@ -22,6 +22,7 @@ import {
   PhotoCaptureSource,
   ReviewAttendanceRequestPayload,
   StandardApiResponse,
+  UserRole,
   WfhWorkflowMode,
   buildPaginationMeta,
   buildResponse,
@@ -33,6 +34,7 @@ import {
   jakartaDateTimeToUtc,
   resolvePagination,
   throwRpcError,
+  toJakartaDateString,
 } from '@app/common';
 import { AttendanceService } from '../attendance/attendance.service';
 
@@ -42,6 +44,8 @@ import { AttendanceService } from '../attendance/attendance.service';
 export class AttendanceRequestsService {
   private readonly logger = new Logger(AttendanceRequestsService.name);
   private readonly transporter: nodemailer.Transporter;
+  private readonly smtpUser: string;
+  private readonly smtpFrom: string;
 
   constructor(
     @InjectRepository(AttendanceRequest)
@@ -50,21 +54,30 @@ export class AttendanceRequestsService {
     private readonly attendanceRepo: Repository<Attendance>,
     @InjectRepository(Department)
     private readonly departmentRepo: Repository<Department>,
+    @InjectRepository(Employee)
+    private readonly employeeRepo: Repository<Employee>,
     private readonly attendanceService: AttendanceService,
     private readonly config: ConfigService,
   ) {
     const host = this.config.get<string>('SMTP_HOST', 'localhost');
     const port = Number(this.config.get<string>('SMTP_PORT', '1025'));
-    const secure = this.config.get<string>('SMTP_SECURE', 'false') === 'true';
+    const secure = this.config.get<string>('SMTP_SECURE', 'false') === 'true' || port === 465;
     const user = this.config.get<string>('SMTP_USER', '');
     const pass = this.config.get<string>('SMTP_PASS', '');
+
+    this.smtpUser = user;
+    this.smtpFrom = this.config.get<string>('SMTP_FROM', '');
 
     this.transporter = nodemailer.createTransport({
       host,
       port,
       secure,
       ...(user && pass ? { auth: { user, pass } } : {}),
+      tls: {
+        rejectUnauthorized: false,
+      },
     });
+    this.logger.log(`Initialized AttendanceRequestsService with SMTP: ${host}:${port} (secure: ${secure}, auth: ${Boolean(user && pass)})`);
   }
 
   // Feature: Hybrid WFH, Overtime & Leave Submission — Purpose: Validates weekly WFH quota (1 day/week), calculates overtime pay (1/173 * 1.5x/2.0x), saves request, and emails Manager + HRD.
@@ -78,11 +91,18 @@ export class AttendanceRequestsService {
     const dept = await this.departmentRepo.findOne({ where: { name: employee.department } });
     const wfhWorkflowMode = policy.wfhWorkflowMode ?? dept?.wfhWorkflowMode ?? WfhWorkflowMode.STRICT_APPROVAL;
     const enableOvertime = policy.enableOvertime ?? dept?.enableOvertime ?? true;
-    const managerName = dept?.managerName ?? 'Ir. Hendra Wijaya, M.Kom';
-    const managerEmail = dept?.managerEmail ?? 'manager.it@dexagroup.com';
     const hrPicEmail = dept?.hrPicEmail ?? 'admin.hrd@dexagroup.com';
+    const isManagerOrAdmin = payload.actor.role === UserRole.MANAGER || payload.actor.role === UserRole.SYSTEM_ADMIN;
+    const managerName = isManagerOrAdmin
+      ? 'Dr. Rina Kusuma, M.Psi (Head of HRD & People Operations)'
+      : (dept?.managerName ?? 'Ir. Hendra Wijaya, M.Kom');
+    const managerEmail = isManagerOrAdmin
+      ? hrPicEmail
+      : (dept?.managerEmail ?? 'manager.it@dexagroup.com');
     const maxWfhDaysPerWeek = policy.maxWfhDaysPerWeek ?? dept?.maxWfhDaysPerWeek ?? 1;
-    const ccList = Array.from(new Set([hrPicEmail.toLowerCase(), employee.email.toLowerCase()]));
+    const ccList = isManagerOrAdmin
+      ? Array.from(new Set(['sysadmin@dexagroup.com', hrPicEmail.toLowerCase(), employee.email.toLowerCase()]))
+      : Array.from(new Set([hrPicEmail.toLowerCase(), employee.email.toLowerCase()]));
 
     if (dto.requestType === AttendanceRequestType.CORRECTION && !dto.requestedClockIn && !dto.requestedClockOut) {
       throwRpcError(
@@ -162,20 +182,9 @@ export class AttendanceRequestsService {
       dto.requestType === AttendanceRequestType.WFH_APPROVAL &&
       wfhWorkflowMode === WfhWorkflowMode.NOTICE_ONLY;
 
-    const emailDispatched = await this.sendApprovalRequestEmail({
-      employee,
-      managerName,
-      managerEmail,
-      ccList,
-      requestType: dto.requestType,
-      targetDate: dto.targetDate,
-      reason: dto.reason,
-      overtimeMinutes,
-      estimatedOvertimePay,
-      maxWfhDaysPerWeek,
-      isNoticeOnly: isNoticeOnlyWfh,
-    });
+    // Email dispatched after record creation below with requestId
 
+    let emailDispatched = false;
     const record = this.requestRepo.create({
       employeeId: employee.id,
       requestType: dto.requestType,
@@ -195,6 +204,25 @@ export class AttendanceRequestsService {
     });
     const saved = await this.requestRepo.save(record);
     saved.employee = employee;
+
+    emailDispatched = await this.sendApprovalRequestEmail({
+      employee,
+      managerName,
+      managerEmail,
+      ccList,
+      requestType: dto.requestType,
+      targetDate: dto.targetDate,
+      reason: dto.reason,
+      overtimeMinutes,
+      estimatedOvertimePay,
+      maxWfhDaysPerWeek,
+      isNoticeOnly: isNoticeOnlyWfh,
+      requestId: saved.id,
+    });
+    if (emailDispatched !== record.emailDispatched) {
+      saved.emailDispatched = emailDispatched;
+      await this.requestRepo.update(saved.id, { emailDispatched });
+    }
 
     const labelMap: Record<AttendanceRequestType, string> = {
       [AttendanceRequestType.WFH_APPROVAL]: isNoticeOnlyWfh ? 'WFH Notice' : 'WFH Approval',
@@ -251,6 +279,13 @@ export class AttendanceRequestsService {
       .leftJoinAndSelect('req.employee', 'employee')
       .orderBy('req.createdAt', 'DESC');
 
+    if (payload.actor.role === UserRole.MANAGER) {
+      const managerEmployee = await this.employeeRepo.findOne({ where: { userId: payload.actor.userId } });
+      if (managerEmployee) {
+        qb.andWhere('employee.department = :mgrDept', { mgrDept: managerEmployee.department });
+      }
+    }
+
     if (query.status) {
       qb.andWhere('req.status = :status', { status: query.status });
     }
@@ -289,6 +324,13 @@ export class AttendanceRequestsService {
     if (!req) {
       throwRpcError(404, where, 'Attendance request not found', `No request exists with ID "${payload.id}".`);
     }
+    if (payload.actor.role === UserRole.MANAGER) {
+      const managerEmployee = await this.employeeRepo.findOne({ where: { userId: payload.actor.userId } });
+      if (managerEmployee && req.employee && req.employee.department !== managerEmployee.department) {
+        throwRpcError(403, where, 'Unauthorized department review', 'You can only review attendance requests for employees in your department.');
+      }
+    }
+
     if (req.status !== ApprovalStatus.PENDING) {
       throwRpcError(400, where, 'Request already reviewed', `This request has already been marked as ${req.status}.`);
     }
@@ -332,14 +374,21 @@ export class AttendanceRequestsService {
       where: { employeeId: req.employeeId, attendanceDate: req.targetDate },
     });
 
+    const todayDate = toJakartaDateString(new Date());
     if (!attendance) {
+      if (req.requestType === AttendanceRequestType.WFH_APPROVAL && req.targetDate > todayDate) {
+        return null as any;
+      }
       attendance = this.attendanceRepo.create({
         employeeId: req.employeeId,
         attendanceDate: req.targetDate,
+        wfhApproved: req.requestType === AttendanceRequestType.WFH_APPROVAL,
         status: req.requestType === AttendanceRequestType.WFH_APPROVAL || req.requestType === AttendanceRequestType.OVERTIME
           ? AttendanceStatus.ON_TIME
           : AttendanceStatus.ON_LEAVE,
       });
+    } else if (req.requestType !== AttendanceRequestType.WFH_APPROVAL && !attendance.clockInTime) {
+      attendance.wfhApproved = false;
     }
 
     if (req.requestType === AttendanceRequestType.WFH_APPROVAL) {
@@ -412,6 +461,7 @@ export class AttendanceRequestsService {
     estimatedOvertimePay: number;
     maxWfhDaysPerWeek: number;
     isNoticeOnly?: boolean;
+    requestId?: string;
   }): Promise<boolean> {
     const {
       employee,
@@ -425,6 +475,7 @@ export class AttendanceRequestsService {
       estimatedOvertimePay,
       maxWfhDaysPerWeek,
       isNoticeOnly,
+      requestId,
     } = params;
 
     const baseSalary = Number(employee.baseSalary ?? 12000000);
@@ -462,6 +513,22 @@ export class AttendanceRequestsService {
             ${extraSection}
             <p style="margin:8px 0 0;font-size:13px;"><strong>Deliverables / Reason:</strong> ${reason}</p>
           </div>
+          ${!isNoticeOnly && requestId ? `
+          <div style="margin:24px 0 16px;text-align:center;">
+            <a href="http://localhost:5173/manager/approvals?requestId=${requestId}" style="background-color:#0A2D62;color:#ffffff;padding:12px 28px;text-decoration:none;border-radius:10px;font-weight:600;font-size:13px;display:inline-block;letter-spacing:0.3px;">
+              Review &amp; Approve in System Portal &rarr;
+            </a>
+          </div>
+          <p style="margin:0 0 16px;font-size:11px;color:#64748b;text-align:center;">
+            Direct Deep-Link: Approvals are authenticated and securely recorded directly within the Dexa WFH Attendance Portal.
+          </p>
+          ` : isNoticeOnly ? `
+          <div style="margin:20px 0 12px;text-align:center;">
+            <a href="http://localhost:5173/manager/approvals" style="background-color:#f1f5f9;color:#0A2D62;padding:10px 22px;text-decoration:none;border:1px solid #cbd5e1;border-radius:8px;font-weight:600;font-size:12px;display:inline-block;">
+              View Team Attendance in Portal &rarr;
+            </a>
+          </div>
+          ` : ''}
           <p style="margin:0;font-size:11px;color:#64748b;">
             © 2026 Abdurrahman Khairi - Created strictly for Technical Assessment evaluation. Unauthorized commercial use is prohibited
           </p>
@@ -469,9 +536,13 @@ export class AttendanceRequestsService {
       </div>
     `;
 
+    const fromAddress = this.smtpUser
+      ? `"${employee.fullName} (via Dexa WFH)" <${this.smtpFrom || this.smtpUser}>`
+      : `"${employee.fullName} (${employee.employeeCode})" <${employee.email}>`;
+
     try {
       await this.transporter.sendMail({
-        from: `"${employee.fullName} (${employee.employeeCode})" <${employee.email}>`,
+        from: fromAddress,
         sender: employee.email,
         replyTo: `"${employee.fullName}" <${employee.email}>`,
         to: managerEmail,
@@ -480,10 +551,11 @@ export class AttendanceRequestsService {
         text: `${subject}\nEmployee: ${employee.fullName} (${employee.employeeCode})\nDepartment: ${employee.department}\nTarget Date: ${targetDate}\nReason: ${reason}`,
         html,
       });
+      this.logger.log(`[SMTP_SUCCESS] Dispatched approval email -> to=${managerEmail} | cc=${ccList.join(', ')} | subject=${subject}`);
       return true;
     } catch (error) {
-      this.logger.warn(`Local SMTP fallback for approval email to ${managerEmail}: ${(error as Error).message}`);
-      return true;
+      this.logger.error(`[SMTP_ERROR] Failed to send email to ${managerEmail}: ${(error as Error).message}`, (error as Error).stack);
+      return false;
     }
   }
 
@@ -494,16 +566,54 @@ export class AttendanceRequestsService {
     const toEmail = req.employee.email;
     const ccEmails = [req.managerEmail, 'admin.hrd@dexagroup.com'].filter(Boolean) as string[];
     const subject = `Dexa Group ${req.requestType.replace('_', ' ')} ${req.status} — ${req.targetDate}`;
+    const isApproved = req.status === ApprovalStatus.APPROVED;
+
+    const fromAddress = this.smtpUser
+      ? `"Dexa Group HRD Approval" <${this.smtpFrom || this.smtpUser}>`
+      : `"Dexa Group HRD Approval" <${reviewerEmail || 'admin.hrd@dexagroup.com'}>`;
+
+    const html = `
+      <div style="font-family:'Inter',Arial,sans-serif;max-width:640px;margin:0 auto;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden;background:#ffffff;">
+        <div style="background:linear-gradient(135deg,#0A2D62 0%,#1a3d6e 100%);padding:20px 24px;color:#ffffff;">
+          <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.2px;opacity:0.85;">Dexa Group • Attendance Request Review</div>
+          <h2 style="margin:6px 0 0;font-size:18px;font-weight:700;">Request ${req.status}: ${req.requestType.replace('_', ' ')}</h2>
+        </div>
+        <div style="padding:24px;color:#1e293b;">
+          <p style="margin:0 0 12px;font-size:14px;">Hello <strong>${req.employee.fullName}</strong>,</p>
+          <p style="margin:0 0 16px;font-size:13px;line-height:1.6;color:#475569;">
+            Your <strong>${req.requestType.replace('_', ' ')}</strong> request for <strong>${req.targetDate}</strong> has been reviewed and marked as:
+          </p>
+          <div style="padding:14px 18px;border-radius:8px;margin-bottom:16px;background:${isApproved ? '#ecfdf5' : '#fef2f2'};border:1px solid ${isApproved ? '#a7f3d0' : '#fecaca'};">
+            <span style="font-weight:700;font-size:15px;color:${isApproved ? '#065f46' : '#991b1b'};">
+              ● ${req.status}
+            </span>
+            ${req.reviewNotes ? `<p style="margin:8px 0 0;font-size:13px;color:#334155;"><strong>Reviewer Notes:</strong> ${req.reviewNotes}</p>` : ''}
+          </div>
+          <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 16px;margin-bottom:16px;font-size:12px;color:#64748b;">
+            <div>Target Date: <strong style="color:#0f172a;">${req.targetDate}</strong></div>
+            <div>Department Manager: <strong style="color:#0f172a;">${req.managerEmail}</strong></div>
+            <div>Reviewed By: <strong style="color:#0f172a;">${reviewerEmail || 'HRD Administration'}</strong></div>
+          </div>
+          <p style="margin:0;font-size:11px;color:#64748b;">
+            © 2026 Abdurrahman Khairi - Created strictly for Technical Assessment evaluation. Unauthorized commercial use is prohibited
+          </p>
+        </div>
+      </div>
+    `;
+
     try {
       await this.transporter.sendMail({
-        from: `"Dexa Group HRD Approval" <${reviewerEmail || 'admin.hrd@dexagroup.com'}>`,
+        from: fromAddress,
+        replyTo: reviewerEmail || 'admin.hrd@dexagroup.com',
         to: toEmail,
         cc: ccEmails,
         subject,
         text: `Your ${req.requestType} request for ${req.targetDate} has been marked as ${req.status}. Notes: ${req.reviewNotes ?? 'None'}.`,
+        html,
       });
+      this.logger.log(`[SMTP_SUCCESS] Dispatched decision email -> to=${toEmail} | status=${req.status}`);
     } catch (error) {
-      this.logger.warn(`Local SMTP fallback for decision email to ${toEmail}: ${(error as Error).message}`);
+      this.logger.error(`[SMTP_ERROR] Failed to send decision email to ${toEmail}: ${(error as Error).message}`, (error as Error).stack);
     }
   }
 }
