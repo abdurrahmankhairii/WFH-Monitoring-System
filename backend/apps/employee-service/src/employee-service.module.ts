@@ -11,14 +11,15 @@ import { ALL_ENTITIES, DatabaseModule } from '@app/common';
 import { AccessRequestsService } from './access-requests/access-requests.service';
 import { AuthService } from './auth/auth.service';
 import { OtpService } from './auth/otp.service';
+import { DatabaseManagementService } from './database-management/database-management.service';
 import { EmployeeServiceController } from './employee-service.controller';
 import { EmployeesService } from './employees/employees.service';
 import { MailService } from './mail/mail.service';
 import { SeedService } from './seed/seed.service';
 import { SupportService } from './support/support.service';
 
-// Feature: #10 — Purpose: Root module for `employee-service` (TCP :3001).
-// OOP: Functional Helper Module — Connected To: Bootstrapped by apps/employee-service/src/main.ts.
+// Feature: Core Microservice Architecture — Purpose: Root module for `employee-service` (TCP :3001) providing Auth, Master Employee, Support, and Database Studio management.
+// OOP: NestJS Root Module (Dependency Injection Composition) — Connected To: Bootstrapped by apps/employee-service/src/main.ts.
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
@@ -27,6 +28,15 @@ import { SupportService } from './support/support.service';
     JwtModule.register({}),
   ],
   controllers: [EmployeeServiceController],
-  providers: [MailService, OtpService, AuthService, EmployeesService, AccessRequestsService, SupportService, SeedService],
+  providers: [
+    MailService,
+    OtpService,
+    AuthService,
+    EmployeesService,
+    AccessRequestsService,
+    SupportService,
+    SeedService,
+    DatabaseManagementService,
+  ],
 })
 export class EmployeeServiceModule {}

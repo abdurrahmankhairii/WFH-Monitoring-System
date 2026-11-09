@@ -141,4 +141,24 @@ export class SupportService {
       data: saved,
     });
   }
+
+  // Feature: SMTP Diagnostic Testing — Purpose: Dispatches an instant diagnostic email to verify SMTP gateway handshake and delivery.
+  // OOP: Domain Service Method (Encapsulated Business Operation) — Connected To: Called by employee-service.controller.ts support.test_email.
+  async testEmail(payload: { actor: any; targetEmail?: string }): Promise<StandardApiResponse> {
+    const where = 'Support - SMTP Diagnostic Test';
+    const target = payload.targetEmail || payload.actor.email;
+    const result = await this.mailService.sendTestEmail(target);
+    if (!result.success) {
+      throwRpcError(400, where, 'Failed to send diagnostic email', result.message);
+    }
+    return buildResponse({
+      where,
+      what: 'Diagnostic email successfully dispatched',
+      why: `Established authenticated TLS handshake and delivered test email to ${target}.`,
+      data: {
+        recipient: target,
+        messageId: result.messageId,
+      },
+    });
+  }
 }

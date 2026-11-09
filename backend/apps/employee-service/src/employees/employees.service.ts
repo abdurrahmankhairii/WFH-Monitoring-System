@@ -3,11 +3,12 @@
 // Created strictly for Technical Assessment evaluation.
 // Unauthorized commercial use, modification, or distribution is prohibited.
 // ============================================================================
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import * as bcrypt from 'bcryptjs';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, Not, Repository } from 'typeorm';
 import {
+  ActorContext,
   CreateEmployeePayload,
   Department,
   Employee,
@@ -16,7 +17,11 @@ import {
   IdActorPayload,
   OtpType,
   StandardApiResponse,
+  ToggleSiblingExemptionDto,
+  ToggleSiblingExemptionPayload,
   UpdateEmployeePayload,
+  UpdateMyProfilePayload,
+  reverseGeocodeCoordinates,
   User,
   UserRole,
   buildPaginationMeta,
@@ -31,6 +36,7 @@ import { MailService } from '../mail/mail.service';
 // OOP: Injectable Domain Service (Business Logic Encapsulation) — Connected To: Exposed via EmployeesController (@MessagePattern EMPLOYEE_PATTERNS) -> Consumed by api-gateway.
 @Injectable()
 export class EmployeesService {
+  private readonly logger = new Logger(EmployeesService.name);
   constructor(
     @InjectRepository(Employee)
     private readonly employeeRepo: Repository<Employee>,
@@ -42,6 +48,49 @@ export class EmployeesService {
     private readonly otpService: OtpService,
     private readonly mailService: MailService,
   ) {}
+
+
+  // Feature: Self-Service Employee Profile Update — Purpose: Allows employees to update contact details and registered WFH home coordinates.
+  // OOP: Domain Service Method (Encapsulated Business Operation) — Connected To: PATCH /api/employees/me/profile -> frontend ProfilePage.tsx.
+  async updateProfile(payload: UpdateMyProfilePayload): Promise<StandardApiResponse> {
+    const where = 'Employee Profile - Update';
+    const employee = await this.employeeRepo.findOne({
+      where: { userId: payload.actor.userId },
+      relations: ['user', 'departmentRef'],
+      withDeleted: false,
+    });
+    if (!employee) {
+      throwRpcError(404, where, 'Employee not found', 'No active employee profile is linked to this account.');
+    }
+
+    if (payload.dto.fullName && payload.dto.fullName.trim().length >= 3) {
+      employee.fullName = payload.dto.fullName.trim();
+    }
+    if (payload.dto.phoneNumber !== undefined) {
+      employee.phoneNumber = payload.dto.phoneNumber || null;
+    }
+    if (typeof payload.dto.homeLatitude === 'number') {
+      employee.homeLatitude = payload.dto.homeLatitude;
+    }
+    if (typeof payload.dto.homeLongitude === 'number') {
+      employee.homeLongitude = payload.dto.homeLongitude;
+    }
+    if (payload.dto.homeAddress !== undefined && payload.dto.homeAddress) {
+      employee.homeAddress = payload.dto.homeAddress.trim();
+    } else if (typeof payload.dto.homeLatitude === 'number' && typeof payload.dto.homeLongitude === 'number') {
+      employee.homeAddress = await reverseGeocodeCoordinates(payload.dto.homeLatitude, payload.dto.homeLongitude);
+    }
+
+    const saved = await this.employeeRepo.save(employee);
+    saved.user = await this.userRepo.findOne({ where: { id: employee.userId } }) || undefined;
+
+    return buildResponse({
+      where,
+      what: `Updated profile for ${saved.fullName}`,
+      why: `Personal contact information and registered home coordinates saved to MySQL.`,
+      data: this.serializeEmployee(saved),
+    });
+  }
 
   // Feature: Master Employee Management — Purpose: Retrieves a paginated, searchable, and filterable list of master employees for HRD Admin.
   // OOP: Domain Service Method (Encapsulated Business Operation) — Connected To: GET /api/employees -> frontend/src/pages/hrd/MasterEmployeesPage.tsx.
@@ -250,6 +299,9 @@ export class EmployeesService {
       employee.departmentRef = matchedDept ?? null;
     }
     if (dto.position !== undefined) employee.position = dto.position.trim();
+    if (dto.homeLatitude !== undefined) employee.homeLatitude = dto.homeLatitude;
+    if (dto.homeLongitude !== undefined) employee.homeLongitude = dto.homeLongitude;
+    if (dto.homeAddress !== undefined) employee.homeAddress = dto.homeAddress;
     if (dto.phoneNumber !== undefined) employee.phoneNumber = dto.phoneNumber ?? null;
     if (dto.joinDate !== undefined) employee.joinDate = dto.joinDate;
     if (dto.baseSalary !== undefined && dto.baseSalary >= 1000000) employee.baseSalary = Math.round(dto.baseSalary);
@@ -427,6 +479,173 @@ export class EmployeesService {
 
   // Feature: Master Employee Management — Purpose: Formats an Employee + User + Department entity triple into a flat, consistent DTO for the frontend.
   // OOP: Domain Service Method (Encapsulated Business Operation) — Connected To: All EmployeesService responses.
+  // Feature: Biometric Face Enrollment — Purpose: Persists the 512-dim ArcFace embedding vector and enrollment photo into MySQL.
+  // OOP: Domain Service Method (Encapsulated Business Operation) — Connected To: POST /api/employees/me/enroll-face -> FaceEnrollmentPage.tsx.
+  async enrollFace(payload: { actor: ActorContext; embedding: number[]; photoUrl?: string }): Promise<StandardApiResponse> {
+    const where = 'Biometric - Face Enrollment';
+    const employee = await this.employeeRepo.findOne({
+      where: { userId: payload.actor.userId },
+      relations: ['user'],
+    });
+
+    if (!employee) {
+      throwRpcError(404, where, 'Employee not found', 'No employee record is linked to your account.');
+    }
+
+    if (!payload.embedding || !Array.isArray(payload.embedding) || payload.embedding.length !== 512) {
+      throwRpcError(400, where, 'Invalid face embedding', 'Face embedding must be a 512-dimensional float array.');
+    }
+
+    // Step: Duplicate Face Prevention & Sibling Exemption Check (Pertamina Reference Standard)
+    await this.checkDuplicateFace(
+      payload.embedding,
+      employee.id,
+      Boolean(employee.isSiblingExempt),
+      employee.siblingExemptApprovedBy,
+    );
+
+    employee.faceEmbedding = payload.embedding;
+    employee.faceEnrolledAt = new Date();
+    if (payload.photoUrl) {
+      employee.faceEnrolledPhotoUrl = payload.photoUrl;
+      employee.avatarUrl = payload.photoUrl;
+    }
+
+    const saved = await this.employeeRepo.save(employee);
+
+    return buildResponse({
+      where,
+      what: 'Face biometric enrolled successfully',
+      why: 'Face biometric verification is active for your account. Full attendance access is now granted.',
+      data: {
+        isFaceEnrolled: true,
+        faceEnrolledAt: saved.faceEnrolledAt,
+        avatarUrl: saved.avatarUrl,
+      },
+    });
+  }
+
+
+  // Feature: Duplicate Face Detection & Sibling Exemption — Purpose: Checks cosine similarity against all enrolled faces with a 3-tier check (unique, sibling suspect with exemption override, identical duplicate block).
+  // OOP: Domain Service Method (Encapsulated Business Operation) — Connected To: Called by enrollFace() before persisting embedding vector.
+  private async checkDuplicateFace(
+    probeEmbedding: number[],
+    currentEmployeeId: string,
+    isSiblingExempt: boolean,
+    approvedBy?: string | null,
+  ): Promise<void> {
+    const where = 'Biometric - Duplicate Face Check';
+    const candidates = await this.employeeRepo.find({
+      where: {
+        id: Not(currentEmployeeId),
+        isActive: true,
+      },
+      select: ['id', 'employeeCode', 'fullName', 'faceEmbedding'],
+    });
+
+    let bestSim = -1.0;
+    let bestMatch: { fullName: string; employeeCode: string; similarity: number } | undefined;
+
+    for (const candidate of candidates) {
+      if (!candidate.faceEmbedding || !Array.isArray(candidate.faceEmbedding) || candidate.faceEmbedding.length !== 512) {
+        continue;
+      }
+
+      let dotProduct = 0;
+      let normA = 0;
+      let normB = 0;
+
+      for (let i = 0; i < 512; i++) {
+        const a = probeEmbedding[i];
+        const b = candidate.faceEmbedding[i];
+        dotProduct += a * b;
+        normA += a * a;
+        normB += b * b;
+      }
+
+      const magnitude = Math.sqrt(normA) * Math.sqrt(normB);
+      const similarity = magnitude > 0 ? Math.max(0, Math.min(1, dotProduct / magnitude)) : 0;
+
+      if (similarity > bestSim) {
+        bestSim = similarity;
+        if (similarity >= 0.50) {
+          bestMatch = {
+            fullName: candidate.fullName,
+            employeeCode: candidate.employeeCode,
+            similarity: Math.round(similarity * 1000) / 10,
+          };
+        }
+      }
+    }
+
+    if (!bestMatch) {
+      // Tier 1: Unique face (< 0.50)
+      return;
+    }
+
+    // Tier 3: Hard duplicate / Identical image spoof (similarity >= 0.90)
+    if (bestMatch.similarity >= 90.0) {
+      throwRpcError(
+        409,
+        where,
+        'Duplicate face registration blocked',
+        `Wajah terdeteksi identik (${bestMatch.similarity}%) dengan karyawan '${bestMatch.fullName}' (${bestMatch.employeeCode}). Sistem menolak pendaftaran foto yang sama untuk akun berbeda demi keamanan biometrik.`,
+      );
+    }
+
+    // Tier 2: Sibling / Identical twin resemblance (0.50 <= similarity < 0.90)
+    if (isSiblingExempt) {
+      this.logger.log(
+        `[SIBLING_EXEMPTION_APPLIED] Employee ${currentEmployeeId} enrolled face with ${bestMatch.similarity}% resemblance to ${bestMatch.fullName} (${bestMatch.employeeCode}) under HR exemption approved by: ${approvedBy || 'HR Admin'}.`,
+      );
+      return;
+    }
+
+    // Not exempt: Block and direct user to HR Admin for sibling exemption verification
+    throwRpcError(
+      409,
+      where,
+      'Biometric conflict detected',
+      `Wajah sudah terdaftar! Wajah ini memiliki kemiripan biometrik ${bestMatch.similarity}% dengan profil karyawan '${bestMatch.fullName}' (${bestMatch.employeeCode}). Jika Anda memiliki saudara kandung atau kembar di Dexa Group, hubungi HR Admin untuk mengaktifkan Sibling Biometric Exemption.`,
+    );
+  }
+
+  // Feature: Biometric Sibling Exemption — Purpose: Enables or disables the sibling exemption override flag for an employee with an identical twin or high facial resemblance.
+  // OOP: Domain Service Method (Encapsulated Business Operation) — Connected To: PATCH /api/employees/:id/sibling-exemption -> EmployeesController.toggleSiblingExemption().
+  async toggleSiblingExemption(payload: {
+    actor: ActorContext;
+    id: string;
+    dto: ToggleSiblingExemptionDto;
+  }): Promise<StandardApiResponse> {
+    const where = 'Master Employee - Sibling Exemption';
+    const employee = await this.employeeRepo.findOne({
+      where: { id: payload.id },
+      relations: ['user', 'departmentRef'],
+    });
+
+    if (!employee) {
+      throwRpcError(404, where, 'Employee not found', `No employee record exists with ID "${payload.id}".`);
+    }
+
+    employee.isSiblingExempt = Boolean(payload.dto.isSiblingExempt);
+    employee.siblingExemptReason = payload.dto.reason || null;
+    employee.siblingExemptApprovedBy = payload.dto.isSiblingExempt
+      ? `${payload.actor.fullName} (${payload.actor.email})`
+      : null;
+
+    const saved = await this.employeeRepo.save(employee);
+
+    return buildResponse({
+      type: 'success',
+      where,
+      what: `${saved.isSiblingExempt ? 'Granted' : 'Revoked'} sibling biometric exemption for ${saved.fullName}`,
+      why: saved.isSiblingExempt
+        ? `Employee is now exempted from sibling face conflict checks (Approved by: ${saved.siblingExemptApprovedBy}).`
+        : 'Sibling biometric exemption has been revoked.',
+      data: this.serializeEmployee(saved),
+    });
+  }
+
   serializeEmployee(emp: Employee) {
     const baseSalary = Number(emp.baseSalary ?? 12000000);
     return {
@@ -448,6 +667,12 @@ export class EmployeesService {
       status: emp.status,
       isActive: emp.isActive,
       avatarUrl: emp.avatarUrl,
+      homeLatitude: emp.homeLatitude !== null && emp.homeLatitude !== undefined ? Number(emp.homeLatitude) : null,
+      homeLongitude: emp.homeLongitude !== null && emp.homeLongitude !== undefined ? Number(emp.homeLongitude) : null,
+      homeAddress: emp.homeAddress ?? null,
+      isSiblingExempt: Boolean(emp.isSiblingExempt),
+      siblingExemptReason: emp.siblingExemptReason ?? null,
+      siblingExemptApprovedBy: emp.siblingExemptApprovedBy ?? null,
       role: emp.user?.role ?? UserRole.EMPLOYEE,
       isVerified: emp.user?.isVerified ?? false,
       lastLoginAt: emp.user?.lastLoginAt ?? null,

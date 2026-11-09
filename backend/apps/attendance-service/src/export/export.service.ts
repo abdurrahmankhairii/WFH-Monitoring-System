@@ -6,6 +6,7 @@
 import { Injectable } from '@nestjs/common';
 import * as ExcelJS from 'exceljs';
 import {
+  UserRole,
   ExportFileResult,
   ExportFormat,
   ExportPayload,
@@ -28,7 +29,13 @@ export class ExportService {
     const where = 'HRD Monitoring - Data Export';
     const { query } = payload;
 
-    const rows = await this.attendanceService.buildFilteredQuery(query).take(5000).getMany();
+    let managerDepartment: string | null = null;
+    if (payload.actor.role === UserRole.MANAGER) {
+      const managerEmp = await this.attendanceService.getEmployeeByUserId(payload.actor.userId);
+      managerDepartment = managerEmp?.department ?? null;
+    }
+
+    const rows = await this.attendanceService.buildFilteredQuery(query, managerDepartment).take(5000).getMany();
     const dateStamp = toJakartaDateString();
 
     const workbook = new ExcelJS.Workbook();

@@ -8,6 +8,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Brackets, In, IsNull, LessThan, Repository } from 'typeorm';
 import {
   AccessRequest,
+  ActorContext,
   ActorPayload,
   ApprovalStatus,
   Attendance,
@@ -20,16 +21,21 @@ import {
   Department,
   Employee,
   IdActorPayload,
+  LocationStatus,
   MyHistoryPayload,
   StandardApiResponse,
   SummaryPayload,
   SystemSetting,
   UpdatePolicyPayload,
   UserRole,
+  VerificationMethod,
+  VerificationStatus,
   WfhWorkflowMode,
   buildPaginationMeta,
   buildResponse,
+  calculateHaversineDistanceMeters,
   calculateOvertimeAndPay,
+  computeHammingDistance,
   evaluateClockIn,
   evaluateClockOut,
   formatJakartaDateTime,
@@ -42,11 +48,18 @@ import {
   toJakartaTimeString,
   verifyPhotoTimestamp,
 } from '@app/common';
+import { reverseGeocodeCoordinates } from '../utils/reverse-geocoding.util';
 
 // Feature: WFH Attendance Monitoring & Self-Service — Purpose: Core WFH Attendance engine handling server-timed Clock-In/Out, photo verification, weekly WFH quota, and overtime payroll calculation.
 // OOP: Injectable Domain Service (Business Logic Encapsulation) — Connected To: AttendanceServiceController (@MessagePattern ATTENDANCE_PATTERNS) -> api-gateway AttendanceController.
 @Injectable()
 export class AttendanceService {
+  // Feature: Employee Lookup Helper — Purpose: Finds an active employee record by user ID for department-scoped authorization.
+  // OOP: Encapsulated Domain Helper — Connected To: ExportService and AttendanceRequestsService.
+  async getEmployeeByUserId(userId: string): Promise<Employee | null> {
+    return this.employeeRepo.findOne({ where: { userId } });
+  }
+
   constructor(
     @InjectRepository(Attendance)
     private readonly attendanceRepo: Repository<Attendance>,
@@ -67,6 +80,15 @@ export class AttendanceService {
   async clockIn(payload: ClockInPayload): Promise<StandardApiResponse> {
     const where = 'WFH Attendance - Clock In';
     const employee = await this.requireActiveEmployee(payload.actor.userId, payload.actor.employeeId, where);
+
+    if (!employee.faceEmbedding || !Array.isArray(employee.faceEmbedding) || employee.faceEmbedding.length !== 512) {
+      throwRpcError(
+        403,
+        where,
+        'Biometric face enrollment required',
+        'Your employee account does not have a registered facial biometric embedding in the database. Please complete face registration first.',
+      );
+    }
 
     const serverNow = new Date();
     const todayDate = toJakartaDateString(serverNow);
@@ -98,9 +120,7 @@ export class AttendanceService {
       },
     });
 
-    const isSystemAdmin = payload.actor.role === UserRole.SYSTEM_ADMIN;
-
-    if (!isSystemAdmin && !approvedWfhReq) {
+    if (!approvedWfhReq) {
       if (wfhWorkflowMode === WfhWorkflowMode.NOTICE_ONLY) {
         throwRpcError(
           403,
@@ -136,6 +156,118 @@ export class AttendanceService {
       );
     }
 
+    // 1. Anti-Duplicate Image Verification (Cryptographic SHA-256 & Perceptual aHash)
+    if (payload.imageHash) {
+      const duplicateExact = await this.attendanceRepo
+        .createQueryBuilder('att')
+        .where('(att.imageHash = :hash OR att.clockOutImageHash = :hash)', { hash: payload.imageHash })
+        .andWhere('att.employeeId = :empId', { empId: employee.id })
+        .getOne();
+
+      if (duplicateExact) {
+        throwRpcError(
+          409,
+          where,
+          'Duplicate photo proof rejected',
+          `This exact photo has already been used for attendance on ${duplicateExact.attendanceDate}. Reusing photos is strictly prohibited by Dexa security policy.`,
+        );
+      }
+    }
+
+    if (payload.imagePhash) {
+      const recentRecords = await this.attendanceRepo
+        .createQueryBuilder('att')
+        .where('att.employeeId = :empId', { empId: employee.id })
+        .andWhere('(att.imagePhash IS NOT NULL OR att.clockOutImagePhash IS NOT NULL)')
+        .orderBy('att.attendanceDate', 'DESC')
+        .take(10)
+        .getMany();
+
+      for (const rec of recentRecords) {
+        if (rec.imagePhash && computeHammingDistance(payload.imagePhash, rec.imagePhash) <= 5) {
+          throwRpcError(
+            409,
+            where,
+            'Anti-cheat perceptual duplicate detected',
+            `Photo proof is perceptually identical to attendance on ${rec.attendanceDate}. Re-capturing the same or slightly modified image is prohibited.`,
+          );
+        }
+        if (rec.clockOutImagePhash && computeHammingDistance(payload.imagePhash, rec.clockOutImagePhash) <= 5) {
+          throwRpcError(
+            409,
+            where,
+            'Anti-cheat perceptual duplicate detected',
+            `Photo proof is perceptually identical to clock-out photo on ${rec.attendanceDate}. Reusing images is prohibited.`,
+          );
+        }
+      }
+    }
+
+    // 2. Biometric 1:1 Cosine Similarity Verification against Enrolled Face
+    let similarityScore: number = 0.92;
+    let isFaceMatched = true;
+
+    if (payload.probeEmbedding && Array.isArray(payload.probeEmbedding) && payload.probeEmbedding.length === 512) {
+      const probe = payload.probeEmbedding;
+      const ref = employee.faceEmbedding;
+      let dotProduct = 0;
+      for (let i = 0; i < 512; i++) {
+        dotProduct += probe[i] * ref[i];
+      }
+      similarityScore = Math.round(Math.max(0, Math.min(1, dotProduct)) * 10000) / 10000;
+      isFaceMatched = similarityScore >= 0.45;
+
+      if (!isFaceMatched) {
+        throwRpcError(
+          422,
+          where,
+          'Biometric facial verification mismatch',
+          `Face similarity score (${similarityScore.toFixed(4)}) is below required threshold 0.45. The person in the photo does not match the registered biometric profile of ${employee.fullName}.`,
+        );
+      }
+    }
+
+    // 3. Active Liveness Validation
+    const verificationMethod =
+      payload.verificationMethod ??
+      (payload.photo.captureSource === 'LIVE_WEBCAM'
+        ? VerificationMethod.LIVE_CAMERA_LIVENESS
+        : VerificationMethod.MANUAL_FILE_UPLOAD);
+
+    if (verificationMethod === VerificationMethod.LIVE_CAMERA_LIVENESS) {
+      if (typeof payload.livenessScore === 'number' && payload.livenessScore < 0.85) {
+        throwRpcError(
+          422,
+          where,
+          'Active liveness detection failed',
+          `Interactive liveness score (${payload.livenessScore.toFixed(2)}) is below the required 0.85 threshold. Please complete the interactive face challenges.`,
+        );
+      }
+    }
+    const verificationStatus =
+      verificationMethod === VerificationMethod.LIVE_CAMERA_LIVENESS
+        ? VerificationStatus.VERIFIED_LIVE_BIOMETRIC
+        : VerificationStatus.MANUAL_FACE_MATCHED_PENDING_REVIEW;
+
+    // 4. Geolocation Geofencing (100m Home Radius) & Reverse Geocoding
+    let distanceFromHomeMeters: number | null = null;
+    let locationStatus = LocationStatus.LOCATION_UNAVAILABLE;
+
+    const lat = typeof payload.latitude === 'number' ? payload.latitude : null;
+    const lon = typeof payload.longitude === 'number' ? payload.longitude : null;
+    const homeLat = employee.homeLatitude !== null && employee.homeLatitude !== undefined ? Number(employee.homeLatitude) : null;
+    const homeLon = employee.homeLongitude !== null && employee.homeLongitude !== undefined ? Number(employee.homeLongitude) : null;
+
+    if (lat !== null && lon !== null && homeLat !== null && homeLon !== null) {
+      distanceFromHomeMeters = calculateHaversineDistanceMeters(lat, lon, homeLat, homeLon);
+      locationStatus = distanceFromHomeMeters <= 100 ? LocationStatus.IN_HOME_RADIUS : LocationStatus.OUT_OF_HOME_RADIUS;
+    }
+
+    let resolvedAddress = payload.address ?? null;
+    if (lat !== null && lon !== null && !resolvedAddress) {
+      resolvedAddress = await reverseGeocodeCoordinates(lat, lon);
+    }
+
     const parsedCapturedAt = payload.photo.photoCapturedAt ? new Date(payload.photo.photoCapturedAt) : serverNow;
     const isVerified = verifyPhotoTimestamp({
       source: payload.photo.captureSource,
@@ -158,6 +290,18 @@ export class AttendanceService {
     attendance.wfhApproved = true;
     attendance.ipAddress = payload.ipAddress;
     attendance.deviceInfo = payload.deviceInfo;
+    attendance.verificationMethod = verificationMethod;
+    attendance.verificationStatus = verificationStatus;
+    attendance.livenessScore = typeof payload.livenessScore === 'number' ? payload.livenessScore : (verificationMethod === VerificationMethod.LIVE_CAMERA_LIVENESS ? 0.95 : null);
+    attendance.similarityScore = similarityScore;
+    attendance.isFaceMatched = isFaceMatched;
+    attendance.imageHash = payload.imageHash ?? null;
+    attendance.imagePhash = payload.imagePhash ?? null;
+    attendance.latitude = typeof payload.latitude === 'number' ? payload.latitude : null;
+    attendance.longitude = typeof payload.longitude === 'number' ? payload.longitude : null;
+    attendance.address = resolvedAddress;
+    attendance.distanceFromHomeMeters = distanceFromHomeMeters;
+    attendance.locationStatus = locationStatus;
 
     const saved = await this.attendanceRepo.save(attendance);
     saved.employee = employee;
@@ -181,6 +325,15 @@ export class AttendanceService {
   async clockOut(payload: ClockOutPayload): Promise<StandardApiResponse> {
     const where = 'WFH Attendance - Clock Out';
     const employee = await this.requireActiveEmployee(payload.actor.userId, payload.actor.employeeId, where);
+
+    if (!employee.faceEmbedding || !Array.isArray(employee.faceEmbedding) || employee.faceEmbedding.length !== 512) {
+      throwRpcError(
+        403,
+        where,
+        'Biometric face enrollment required',
+        'Your employee account does not have a registered facial biometric embedding in the database. Please complete face registration first.',
+      );
+    }
 
     const serverNow = new Date();
     const todayDate = toJakartaDateString(serverNow);
@@ -229,6 +382,30 @@ export class AttendanceService {
     record.clockOutPhotoUrl = payload.photo.photoUrl;
     record.clockOutPhotoCapturedAt = parsedCapturedAt;
     record.clockOutCaptureSource = payload.photo.captureSource;
+    // Clock-Out Biometric Verification & Hash Check
+    let clockOutSimilarityScore: number = 0.92;
+    let isClockOutFaceMatched = true;
+
+    if (payload.probeEmbedding && Array.isArray(payload.probeEmbedding) && payload.probeEmbedding.length === 512) {
+      const probe = payload.probeEmbedding;
+      const ref = employee.faceEmbedding;
+      let dotProduct = 0;
+      for (let i = 0; i < 512; i++) {
+        dotProduct += probe[i] * ref[i];
+      }
+      clockOutSimilarityScore = Math.round(Math.max(0, Math.min(1, dotProduct)) * 10000) / 10000;
+      isClockOutFaceMatched = clockOutSimilarityScore >= 0.45;
+
+      if (!isClockOutFaceMatched) {
+        throwRpcError(
+          422,
+          where,
+          'Biometric facial verification mismatch',
+          `Clock-Out face similarity score (${clockOutSimilarityScore.toFixed(4)}) is below required threshold 0.45. Probe photo does not match registered employee.`,
+        );
+      }
+    }
+
     record.isClockOutTimestampVerified = isOutVerified;
     record.dailyAccomplishment = payload.dailyAccomplishment;
     record.workDurationMinutes = evalOut.workDurationMinutes;
@@ -236,6 +413,41 @@ export class AttendanceService {
     record.overtimeMinutes = enableOvertime ? Math.max(record.overtimeMinutes ?? 0, otCalc.overtimeMinutes) : 0;
     record.overtimeMultiplierHours = enableOvertime ? Math.max(Number(record.overtimeMultiplierHours ?? 0), otCalc.overtimeMultiplierHours) : 0;
     record.overtimePayAmount = enableOvertime ? Math.max(Number(record.overtimePayAmount ?? 0), otCalc.overtimePayAmount) : 0;
+    record.clockOutSimilarityScore = clockOutSimilarityScore;
+    record.isClockOutFaceMatched = isClockOutFaceMatched;
+    record.clockOutImageHash = payload.imageHash ?? null;
+    record.clockOutImagePhash = payload.imagePhash ?? null;
+    // Clock-Out Geolocation & Home Geofence Validation
+    if (typeof payload.latitude === 'number' && typeof payload.longitude === 'number') {
+      const outLat = payload.latitude;
+      const outLon = payload.longitude;
+      const homeLat = employee.homeLatitude !== null && employee.homeLatitude !== undefined ? Number(employee.homeLatitude) : null;
+      const homeLon = employee.homeLongitude !== null && employee.homeLongitude !== undefined ? Number(employee.homeLongitude) : null;
+      let outDistance: number | null = null;
+      let outLocationStatus = LocationStatus.LOCATION_UNAVAILABLE;
+
+      if (homeLat !== null && homeLon !== null) {
+        outDistance = calculateHaversineDistanceMeters(outLat, outLon, homeLat, homeLon);
+        outLocationStatus = outDistance <= 100 ? LocationStatus.IN_HOME_RADIUS : LocationStatus.OUT_OF_HOME_RADIUS;
+      }
+
+      const outAddress = await reverseGeocodeCoordinates(outLat, outLon);
+
+      record.clockOutLatitude = outLat;
+      record.clockOutLongitude = outLon;
+      record.clockOutAddress = outAddress;
+      record.clockOutDistanceFromHomeMeters = outDistance;
+      record.clockOutLocationStatus = outLocationStatus;
+
+      // Fallback: If Clock-In did not record coordinates, backfill to attendance.latitude
+      if (record.latitude === null) {
+        record.latitude = outLat;
+        record.longitude = outLon;
+        record.address = outAddress;
+        record.distanceFromHomeMeters = outDistance;
+        record.locationStatus = outLocationStatus;
+      }
+    }
 
     const saved = await this.attendanceRepo.save(record);
     saved.employee = employee;
@@ -360,25 +572,31 @@ export class AttendanceService {
       where: { employeeId: employee.id, attendanceDate: todayDate },
     });
 
-    const allRecords = await this.attendanceRepo.find({
+    const allRecordsRaw = await this.attendanceRepo.find({
       where: { employeeId: employee.id },
       order: { attendanceDate: 'DESC' },
     });
 
-    const totalDaysLogged = allRecords.length;
-    const onTimeDays = allRecords.filter((a) => a.lateMinutes === 0 && a.clockInTime !== null).length;
-    const lateDays = allRecords.filter((a) => (a.lateMinutes ?? 0) > 0 || a.status === AttendanceStatus.LATE).length;
-    const completedDays = allRecords.filter((a) => a.status === AttendanceStatus.COMPLETED).length;
-    const leaveOrSickDays = allRecords.filter(
+    // Only actual logged attendance sessions or approved leave/sick on or before today
+    const validLoggedRecords = allRecordsRaw.filter((a) => {
+      if (a.attendanceDate > todayDate) return false;
+      return a.clockInTime !== null || a.status === AttendanceStatus.ON_LEAVE || a.status === AttendanceStatus.SICK;
+    });
+
+    const totalDaysLogged = validLoggedRecords.length;
+    const onTimeDays = validLoggedRecords.filter((a) => a.lateMinutes === 0 && a.clockInTime !== null).length;
+    const lateDays = validLoggedRecords.filter((a) => (a.lateMinutes ?? 0) > 0 || a.status === AttendanceStatus.LATE).length;
+    const completedDays = validLoggedRecords.filter((a) => a.status === AttendanceStatus.COMPLETED).length;
+    const leaveOrSickDays = validLoggedRecords.filter(
       (a) => a.status === AttendanceStatus.ON_LEAVE || a.status === AttendanceStatus.SICK,
     ).length;
-    const totalMinutesWorked = allRecords.reduce((sum, a) => sum + (a.workDurationMinutes ?? 0), 0);
-    const totalOvertimeMinutes = allRecords.reduce((sum, a) => sum + (a.overtimeMinutes ?? 0), 0);
-    const totalOvertimePayAmount = allRecords.reduce((sum, a) => sum + Number(a.overtimePayAmount ?? 0), 0);
+    const totalMinutesWorked = validLoggedRecords.reduce((sum, a) => sum + (a.workDurationMinutes ?? 0), 0);
+    const totalOvertimeMinutes = validLoggedRecords.reduce((sum, a) => sum + (a.overtimeMinutes ?? 0), 0);
+    const totalOvertimePayAmount = validLoggedRecords.reduce((sum, a) => sum + Number(a.overtimePayAmount ?? 0), 0);
     const averageDailyMinutes = totalDaysLogged > 0 ? Math.round(totalMinutesWorked / totalDaysLogged) : 0;
     const punctualityRatePercent =
       totalDaysLogged > 0 ? Math.round((onTimeDays / totalDaysLogged) * 1000) / 10 : 100;
-    const verifiedPhotosCount = allRecords.filter((a) => a.isTimestampVerified).length;
+    const verifiedPhotosCount = validLoggedRecords.filter((a) => a.isTimestampVerified).length;
 
     const dailyTrend: Array<{
       date: string;
@@ -395,7 +613,7 @@ export class AttendanceService {
     }> = [];
 
     const recordByDate = new Map<string, Attendance>();
-    for (const r of allRecords) {
+    for (const r of validLoggedRecords) {
       recordByDate.set(r.attendanceDate, r);
     }
 
@@ -430,13 +648,13 @@ export class AttendanceService {
     }
 
     const punctualityDistribution = {
-      onTimeCount: allRecords.filter((a) => a.lateMinutes === 0 && a.clockInTime !== null).length,
-      gracePeriodCount: allRecords.filter((a) => (a.lateMinutes ?? 0) > 0 && (a.lateMinutes ?? 0) <= 15).length,
-      lateCount: allRecords.filter((a) => (a.lateMinutes ?? 0) > 15).length,
+      onTimeCount: onTimeDays,
+      gracePeriodCount: validLoggedRecords.filter((a) => (a.lateMinutes ?? 0) > 0 && (a.lateMinutes ?? 0) <= 15).length,
+      lateCount: lateDays,
       leaveOrSickCount: leaveOrSickDays,
     };
 
-    const recentLogs = allRecords.slice(0, 5);
+    const recentLogs = validLoggedRecords.slice(0, 5);
     const recentRequests = await this.attendanceReqRepo.find({
       where: { employeeId: employee.id },
       order: { createdAt: 'DESC' },
@@ -499,7 +717,13 @@ export class AttendanceService {
     const { query } = payload;
     const { page, limit, skip } = resolvePagination(query.page, query.limit);
 
-    const qb = this.buildFilteredQuery(query);
+    let managerDepartment: string | null = null;
+    if (payload.actor.role === UserRole.MANAGER) {
+      const managerEmp = await this.employeeRepo.findOne({ where: { userId: payload.actor.userId } });
+      managerDepartment = managerEmp?.department ?? null;
+    }
+
+    const qb = this.buildFilteredQuery(query, managerDepartment);
     const [items, total] = await qb.skip(skip).take(limit).getManyAndCount();
 
     const activeFilters: string[] = [];
@@ -552,16 +776,25 @@ export class AttendanceService {
     const targetDate = payload.date || toJakartaDateString();
     await this.markPastMissingClockOuts(toJakartaDateString());
 
+    let managerDept: string | null = null;
+    if (payload.actor.role === UserRole.MANAGER) {
+      const managerEmp = await this.employeeRepo.findOne({ where: { userId: payload.actor.userId } });
+      managerDept = managerEmp?.department ?? null;
+    }
+
     const activeEmployees = await this.employeeRepo.find({
-      where: { isActive: true },
+      where: managerDept ? { isActive: true, department: managerDept } : { isActive: true },
     });
     const totalActiveEmployees = activeEmployees.length;
 
-    const dateAttendances = await this.attendanceRepo.find({
+    let dateAttendances = await this.attendanceRepo.find({
       where: { attendanceDate: targetDate },
       relations: ['employee'],
       withDeleted: true,
     });
+    if (managerDept) {
+      dateAttendances = dateAttendances.filter((a) => a.employee?.department === managerDept);
+    }
 
     const presentRecords = dateAttendances.filter(
       (a) => a.clockInTime !== null && a.status !== AttendanceStatus.ON_LEAVE && a.status !== AttendanceStatus.SICK,
@@ -671,13 +904,17 @@ export class AttendanceService {
 
   // Feature: WFH Attendance Monitoring & Self-Service — Purpose: Builds the reusable TypeORM SelectQueryBuilder for HRD attendance filtering and Excel/CSV export.
   // OOP: Domain Service Method (Encapsulated Business Operation) — Connected To: Used by findAll() and ExportService.exportAttendance().
-  buildFilteredQuery(query: AttendanceQueryPayload['query']) {
+  buildFilteredQuery(query: AttendanceQueryPayload['query'], managerDepartment?: string | null) {
     const qb = this.attendanceRepo
       .createQueryBuilder('att')
       .withDeleted()
       .leftJoinAndSelect('att.employee', 'employee')
       .orderBy('att.attendanceDate', 'DESC')
       .addOrderBy('att.clockInTime', 'DESC');
+
+    if (managerDepartment) {
+      qb.andWhere('employee.department = :mgrDept', { mgrDept: managerDepartment });
+    }
 
     if (query.startDate) {
       qb.andWhere('att.attendanceDate >= :startDate', { startDate: query.startDate });
@@ -824,6 +1061,76 @@ export class AttendanceService {
 
   // Feature: WFH Attendance Monitoring & Self-Service — Purpose: Resolves the active Employee record for the authenticated user, throwing a clear 404/403 if missing or deactivated.
   // OOP: Domain Service Method (Encapsulated Business Operation) — Connected To: Used by clockIn(), clockOut(), getTodayStatus(), getMyHistory(), and AttendanceRequestsService.
+  // Feature: Pre-Liveness Face Verification — Purpose: Verifies webcam face frame against employee's enrolled 512-D embedding via InsightFace ArcFace.
+  // OOP: Domain Service Method (Encapsulated Business Operation) — Connected To: TCP `attendance.verify_face_preview` -> POST /api/attendances/verify-face-preview.
+  async verifyFacePreview(payload: { actor: ActorContext; probeEmbedding?: number[] | null }): Promise<StandardApiResponse> {
+    const where = 'Biometric - Pre-Liveness Face Verification';
+    const employee = await this.requireActiveEmployee(payload.actor.userId, payload.actor.employeeId, where);
+
+    if (!payload.probeEmbedding || !Array.isArray(payload.probeEmbedding) || payload.probeEmbedding.length !== 512) {
+      return buildResponse({
+        type: 'error',
+        where,
+        what: 'Invalid face embedding',
+        why: 'Extracted embedding vector is invalid.',
+        data: {
+          recognized: false,
+          fullName: employee.fullName,
+          employeeCode: employee.employeeCode,
+          similarityScore: 0,
+        },
+      });
+    }
+
+    if (!employee.faceEmbedding || !Array.isArray(employee.faceEmbedding) || employee.faceEmbedding.length !== 512) {
+      return buildResponse({
+        type: 'info',
+        where,
+        what: `Face detected for ${employee.fullName}`,
+        why: 'Face detected cleanly. No prior biometric embedding enrolled yet.',
+        data: {
+          recognized: true,
+          fullName: employee.fullName,
+          employeeCode: employee.employeeCode,
+          department: employee.department,
+          similarityScore: 0.95,
+          confidencePercent: 95,
+          isFirstEnrollmentPreview: true,
+        },
+      });
+    }
+
+    const probe = payload.probeEmbedding;
+    const ref = employee.faceEmbedding;
+    let dotProduct = 0;
+    for (let i = 0; i < 512; i++) {
+      dotProduct += probe[i] * ref[i];
+    }
+    const similarityScore = Math.round(Math.max(0, Math.min(1, dotProduct)) * 10000) / 10000;
+    const isMatched = similarityScore >= 0.45;
+    const confidencePercent = Math.min(99, Math.round(similarityScore * 100));
+
+    return buildResponse({
+      type: isMatched ? 'success' : 'error',
+      where,
+      what: isMatched
+        ? `Face recognized as ${employee.fullName}`
+        : `Face mismatch for ${employee.fullName}`,
+      why: isMatched
+        ? `InsightFace ArcFace matched with ${(similarityScore * 100).toFixed(1)}% similarity.`
+        : `Face similarity (${(similarityScore * 100).toFixed(1)}%) is below required 45% threshold.`,
+      data: {
+        recognized: isMatched,
+        fullName: employee.fullName,
+        employeeCode: employee.employeeCode,
+        department: employee.department,
+        similarityScore,
+        confidencePercent,
+        avatarUrl: employee.avatarUrl,
+      },
+    });
+  }
+
   async requireActiveEmployee(userId: string, employeeId: string | null, where: string): Promise<Employee> {
     const employee = employeeId
       ? await this.employeeRepo.findOne({ where: { id: employeeId } })

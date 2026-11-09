@@ -117,7 +117,7 @@ export class AuthService {
     return buildResponse({
       where,
       what: `Welcome back, ${fullName}`,
-      why: `Authenticated as ${user.role} (${user.email}) with an active JWT session.`,
+      why: 'Signed in successfully to Dexa WFH Attendance Portal.',
       data: {
         ...tokens,
         user: this.serializeUserProfile(user, user.employee ?? null),
@@ -380,6 +380,7 @@ export class AuthService {
       role: user.role,
       employeeId: employee?.id ?? null,
       fullName: employee?.fullName ?? user.email,
+      department: employee?.department ?? 'General',
     };
 
     const [accessToken, refreshToken] = await Promise.all([
@@ -421,8 +422,17 @@ export class AuthService {
       joinDate: employee?.joinDate ?? null,
       baseSalary,
       hourlyOvertimeRate: Math.round(baseSalary / 173),
+      homeLatitude: employee?.homeLatitude !== null && employee?.homeLatitude !== undefined ? Number(employee.homeLatitude) : null,
+      homeLongitude: employee?.homeLongitude !== null && employee?.homeLongitude !== undefined ? Number(employee.homeLongitude) : null,
+      homeAddress: employee?.homeAddress ?? null,
       status: employee?.status ?? 'ACTIVE',
       avatarUrl: employee?.avatarUrl ?? null,
+      isFaceEnrolled: Boolean(
+        employee?.faceEmbedding &&
+        Array.isArray(employee.faceEmbedding) &&
+        employee.faceEmbedding.length === 512,
+      ),
+      faceEnrolledAt: employee?.faceEnrolledAt ?? null,
     };
   }
 }
