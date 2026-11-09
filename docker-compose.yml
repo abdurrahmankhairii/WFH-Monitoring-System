@@ -4,7 +4,7 @@
 # Unauthorized commercial use, modification, or distribution is prohibited.
 # ============================================================================
 # Dexa Group — WFH Attendance & Employee Monitoring System
-# Full-Stack Microservices Orchestration (MySQL 8.0 + Mailpit + FastAPI Biometric + 3 NestJS Microservices + React Frontend)
+# Full-Stack Microservices Orchestration (MySQL 8.0 + FastAPI Biometric + 3 NestJS Microservices + React Frontend)
 
 services:
   mysql:
@@ -26,14 +26,6 @@ services:
       interval: 5s
       timeout: 5s
       retries: 20
-
-  mailpit:
-    image: axllent/mailpit:latest
-    container_name: dexa-wfh-mailpit
-    restart: unless-stopped
-    ports:
-      - "1025:1025" # SMTP Server Port
-      - "8025:8025" # Web UI Inbox (View OTP & Contact Developer Emails)
 
   biometric-service:
     build:
@@ -63,8 +55,6 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
-      mailpit:
-        condition: service_started
       biometric-service:
         condition: service_healthy
     environment:
@@ -81,12 +71,13 @@ services:
       JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:-dexa-wfh-jwt-access-secret-2026-abdurrahman-khairi}
       JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-dexa-wfh-jwt-refresh-secret-2026-abdurrahman-khairi}
       OTP_EXPIRES_MINUTES: ${OTP_EXPIRES_MINUTES:-10}
-      SMTP_HOST: ${SMTP_HOST:-mailpit}
-      SMTP_PORT: ${SMTP_PORT:-1025}
+      SMTP_HOST: ${SMTP_HOST:-smtp.gmail.com}
+      SMTP_PORT: ${SMTP_PORT:-587}
       SMTP_SECURE: ${SMTP_SECURE:-false}
       SMTP_USER: ${SMTP_USER:-}
       SMTP_PASS: ${SMTP_PASS:-}
       SMTP_FROM: ${SMTP_FROM:-}
+      SMTP_OVERRIDE_RECIPIENT: ${SMTP_OVERRIDE_RECIPIENT:-}
       SYSTEM_NOREPLY_EMAIL: ${SYSTEM_NOREPLY_EMAIL:-noreply-wfh@dexagroup.com}
       DEVELOPER_SUPPORT_EMAIL: ${DEVELOPER_SUPPORT_EMAIL:-abdurrahman.khairi@dexagroup.com}
     ports:
@@ -107,8 +98,6 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
-      mailpit:
-        condition: service_started
       employee-service:
         condition: service_healthy
       biometric-service:
@@ -124,12 +113,13 @@ services:
       ATTENDANCE_SERVICE_HOST: 0.0.0.0
       ATTENDANCE_SERVICE_PORT: 3002
       BIOMETRIC_SERVICE_URL: ${BIOMETRIC_SERVICE_URL:-http://biometric-service:8000}
-      SMTP_HOST: ${SMTP_HOST:-mailpit}
-      SMTP_PORT: ${SMTP_PORT:-1025}
+      SMTP_HOST: ${SMTP_HOST:-smtp.gmail.com}
+      SMTP_PORT: ${SMTP_PORT:-587}
       SMTP_SECURE: ${SMTP_SECURE:-false}
       SMTP_USER: ${SMTP_USER:-}
       SMTP_PASS: ${SMTP_PASS:-}
       SMTP_FROM: ${SMTP_FROM:-}
+      SMTP_OVERRIDE_RECIPIENT: ${SMTP_OVERRIDE_RECIPIENT:-}
       SYSTEM_NOREPLY_EMAIL: ${SYSTEM_NOREPLY_EMAIL:-noreply-wfh@dexagroup.com}
       DEVELOPER_SUPPORT_EMAIL: ${DEVELOPER_SUPPORT_EMAIL:-abdurrahman.khairi@dexagroup.com}
       WORK_START_TIME: ${WORK_START_TIME:-08:30}

@@ -68,13 +68,13 @@ web_modules/
 # Yarn Integrity file
 .yarn-integrity
 
-# dotenv environment variable files (Root & Monorepo Sub-packages)
+# dotenv environment variable files (Strictly ignore all .env and .env.example files across all directories)
 .env
-.env.*
-!.env.example
-*/.env
-*/.env.*
-!*/.env.example
+.env*
+*.env
+*.env*
+**/.env
+**/.env*
 
 # parcel-bundler cache (https://parceljs.org/)
 .cache
