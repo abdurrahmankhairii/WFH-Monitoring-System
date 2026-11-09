@@ -77,15 +77,78 @@ export class CreateEmployeeDto {
   @IsOptional()
   @IsEnum(UserRole)
   role?: UserRole;
+
+
+  @EmptyToUndefined()
+  @IsOptional()
+  @Type(() => Number)
+  homeLatitude?: number;
+
+  @EmptyToUndefined()
+  @IsOptional()
+  @Type(() => Number)
+  homeLongitude?: number;
+
+  @EmptyToUndefined()
+  @IsOptional()
+  @IsString()
+  homeAddress?: string;
 }
 
 // Feature: Master Employee Validation DTOs — Purpose: HR Admin payload to update an employee profile, role or active/on-leave status (deactivation uses soft delete instead).
 // OOP: Data Transfer Object (Encapsulated Validation Contract) — Connected To: PATCH /api/employees/:id -> employees.service.ts update().
+// Feature: Self-Service Profile Update DTO — Purpose: Payload for employees to update contact information and registered home coordinates.
+// OOP: Data Transfer Object (Encapsulated Validation Contract) — Connected To: PATCH /api/employees/me/profile -> employees.service.ts updateProfile().
+export class UpdateMyProfileDto {
+  @EmptyToUndefined()
+  @IsOptional()
+  @Trim()
+  @IsString()
+  @MinLength(3)
+  @MaxLength(150)
+  fullName?: string;
+
+  @EmptyToUndefined()
+  @IsOptional()
+  @Matches(/^[0-9+\-\s]{8,30}$/, { message: 'Phone number may only contain digits, spaces, + and -' })
+  phoneNumber?: string;
+
+  @EmptyToUndefined()
+  @IsOptional()
+  @Type(() => Number)
+  homeLatitude?: number;
+
+  @EmptyToUndefined()
+  @IsOptional()
+  @Type(() => Number)
+  homeLongitude?: number;
+
+  @EmptyToUndefined()
+  @IsOptional()
+  @IsString()
+  homeAddress?: string;
+}
+
 export class UpdateEmployeeDto extends PartialType(CreateEmployeeDto) {
   @EmptyToUndefined()
   @IsOptional()
   @IsIn([EmployeeStatus.ACTIVE, EmployeeStatus.ON_LEAVE], { message: 'Status can only be ACTIVE or ON_LEAVE (use deactivate for INACTIVE)' })
   status?: EmployeeStatus;
+
+  @EmptyToUndefined()
+  @IsOptional()
+  @Type(() => Number)
+  homeLatitude?: number;
+
+  @EmptyToUndefined()
+  @IsOptional()
+  @Type(() => Number)
+  homeLongitude?: number;
+
+  @EmptyToUndefined()
+  @IsOptional()
+  @IsString()
+  homeAddress?: string;
 }
 
 // Feature: Master Employee Validation DTOs — Purpose: Filters for the Master Employee table.
@@ -156,4 +219,17 @@ export class RejectAccessRequestDto {
   @MinLength(5, { message: 'Please provide a rejection reason of at least 5 characters' })
   @MaxLength(1000)
   reviewNotes: string;
+}
+// Feature: Biometric Sibling Exemption — Purpose: Validates the payload for toggling biometric sibling exemption for employees with identical twins or lookalike siblings.
+// OOP: Data Transfer Object (Encapsulated Validation Contract) — Connected To: PATCH /api/employees/:id/sibling-exemption -> EmployeesService.toggleSiblingExemption().
+export class ToggleSiblingExemptionDto {
+  @IsBoolean()
+  isSiblingExempt: boolean;
+
+  @EmptyToUndefined()
+  @IsOptional()
+  @Trim()
+  @IsString()
+  @MaxLength(1000)
+  reason?: string;
 }

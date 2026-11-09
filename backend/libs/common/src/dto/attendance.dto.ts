@@ -4,7 +4,7 @@
 // Unauthorized commercial use, modification, or distribution is prohibited.
 // ============================================================================
 import { Type } from 'class-transformer';
-import { IsBoolean, IsDateString, IsEnum, IsIn, IsInt, IsOptional, IsString, Matches, Max, MaxLength, Min, MinLength } from 'class-validator';
+import { IsBoolean, IsDateString, IsEnum, IsIn, IsInt, IsNumber, IsOptional, IsString, Matches, Max, MaxLength, Min, MinLength } from 'class-validator';
 import {
   ApprovalStatus,
   AttendanceRequestType,
@@ -12,6 +12,9 @@ import {
   ExportFormat,
   PhotoCaptureSource,
   SupportCategory,
+  VerificationMethod,
+  VerificationStatus,
+  LocationStatus,
   WfhWorkflowMode,
 } from '../constants/enums';
 import { PaginationQueryDto } from './employee.dto';
@@ -34,6 +37,41 @@ export class ClockInDto {
   @IsString()
   @MaxLength(2000)
   dailyPlan?: string;
+
+  @EmptyToUndefined()
+  @IsOptional()
+  @IsEnum(VerificationMethod)
+  verificationMethod?: VerificationMethod;
+
+  @EmptyToUndefined()
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  livenessScore?: number;
+
+  @EmptyToUndefined()
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  latitude?: number;
+
+  @EmptyToUndefined()
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  longitude?: number;
+
+  @EmptyToUndefined()
+  @IsOptional()
+  @Trim()
+  @IsString()
+  address?: string;
+
+  @EmptyToUndefined()
+  @IsOptional()
+  @Trim()
+  @IsString()
+  deviceIssueReason?: string;
 }
 
 // Feature: WFH Attendance & Request Validation DTOs — Purpose: Multipart text fields sent with the Clock-Out photo, including the mandatory daily accomplishment summary.
@@ -52,6 +90,41 @@ export class ClockOutDto {
   @MinLength(10, { message: 'Daily accomplishment is mandatory (minimum 10 characters) before closing the session' })
   @MaxLength(2000)
   dailyAccomplishment: string;
+
+  @EmptyToUndefined()
+  @IsOptional()
+  @IsEnum(VerificationMethod)
+  verificationMethod?: VerificationMethod;
+
+  @EmptyToUndefined()
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  livenessScore?: number;
+
+  @EmptyToUndefined()
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  latitude?: number;
+
+  @EmptyToUndefined()
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  longitude?: number;
+
+  @EmptyToUndefined()
+  @IsOptional()
+  @Trim()
+  @IsString()
+  address?: string;
+
+  @EmptyToUndefined()
+  @IsOptional()
+  @Trim()
+  @IsString()
+  deviceIssueReason?: string;
 }
 
 // Feature: WFH Attendance & Request Validation DTOs — Purpose: Filter set for HRD monitoring list and payroll export.
