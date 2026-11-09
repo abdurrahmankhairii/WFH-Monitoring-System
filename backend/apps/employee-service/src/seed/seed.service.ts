@@ -62,7 +62,7 @@ export class SeedService implements OnApplicationBootstrap {
       {
         code: 'DEPT-IT',
         name: 'IT & Digital Innovation',
-        managerName: 'Ir. Hendra Wijaya, M.Kom',
+        managerName: 'Manager One',
         managerEmail: 'manager.it@dexagroup.com',
         hrPicEmail: 'admin.hrd@dexagroup.com',
         maxWfhDaysPerWeek: 1,
@@ -70,7 +70,7 @@ export class SeedService implements OnApplicationBootstrap {
       {
         code: 'DEPT-HRD',
         name: 'HRD & People Operations',
-        managerName: 'Dr. Rina Kusuma, M.Psi',
+        managerName: 'HR Admin One',
         managerEmail: 'admin.hrd@dexagroup.com',
         hrPicEmail: 'admin.hrd@dexagroup.com',
         maxWfhDaysPerWeek: 1,
@@ -78,7 +78,7 @@ export class SeedService implements OnApplicationBootstrap {
       {
         code: 'DEPT-FIN',
         name: 'Finance & Accounting',
-        managerName: 'Drs. Bambang Hartono, Ak., CA',
+        managerName: 'Manager Two',
         managerEmail: 'manager.finance@dexagroup.com',
         hrPicEmail: 'admin.hrd@dexagroup.com',
         maxWfhDaysPerWeek: 1,
@@ -86,7 +86,7 @@ export class SeedService implements OnApplicationBootstrap {
       {
         code: 'DEPT-QA',
         name: 'Quality Assurance & R&D',
-        managerName: 'apt. Ratna Dewi, M.Farm',
+        managerName: 'Manager Three',
         managerEmail: 'manager.qa@dexagroup.com',
         hrPicEmail: 'admin.hrd@dexagroup.com',
         maxWfhDaysPerWeek: 1,
@@ -94,7 +94,7 @@ export class SeedService implements OnApplicationBootstrap {
       {
         code: 'DEPT-SCM',
         name: 'Supply Chain & Logistics',
-        managerName: 'Ir. Gunawan Saputra, M.T.',
+        managerName: 'Manager Four',
         managerEmail: 'manager.scm@dexagroup.com',
         hrPicEmail: 'admin.hrd@dexagroup.com',
         maxWfhDaysPerWeek: 1,
@@ -117,6 +117,18 @@ export class SeedService implements OnApplicationBootstrap {
       'DEXA-2026-003': 13500000,
       'DEXA-2026-004': 14500000,
       'DEXA-2026-005': 12500000,
+    };
+
+    const homeCoordsByCode: Record<string, { lat: number; lon: number }> = {
+      'DEXA-SYS-001': { lat: -6.175392, lon: 106.827153 },
+      'DEXA-2026-001': { lat: -6.225, lon: 106.8 },
+      'DEXA-2026-002': { lat: -6.1925, lon: 106.782 },
+      'DEXA-2026-003': { lat: -6.24, lon: 106.86 },
+      'DEXA-2026-004': { lat: -6.21, lon: 106.845 },
+      'DEXA-2026-005': { lat: -6.185, lon: 106.832 },
+      'DEXA-2026-625': { lat: -6.175392, lon: 106.827153 },
+      'DEXA-MGR-001': { lat: -6.29, lon: 106.84 },
+      'DEXA-MGR-002': { lat: -6.255, lon: 106.798 },
     };
 
     const employees = await this.employeeRepo.find({ withDeleted: true });
@@ -163,7 +175,7 @@ export class SeedService implements OnApplicationBootstrap {
             targetDate: shiftDateString(today, -8),
             reason: 'Weekly 1-day hybrid WFH quota for sprint backend microservice deployment and database optimization.',
             managerEmail: itDept?.managerEmail ?? 'manager.it@dexagroup.com',
-            ccEmails: 'admin.hrd@dexagroup.com, budi.santoso@dexagroup.com',
+            ccEmails: 'admin.hrd@dexagroup.com, employee.one@dexagroup.com',
             emailDispatched: true,
             status: ApprovalStatus.APPROVED,
             reviewNotes: 'Approved within 1-day/week department WFH quota by IT Manager & HRD.',
@@ -179,7 +191,7 @@ export class SeedService implements OnApplicationBootstrap {
             estimatedOvertimePay: budiOt.overtimePayAmount,
             reason: 'Production deployment hotfix and post-release database indexing (17:30 - 19:00 WIB).',
             managerEmail: itDept?.managerEmail ?? 'manager.it@dexagroup.com',
-            ccEmails: 'admin.hrd@dexagroup.com, budi.santoso@dexagroup.com',
+            ccEmails: 'admin.hrd@dexagroup.com, employee.one@dexagroup.com',
             emailDispatched: true,
             status: ApprovalStatus.APPROVED,
             reviewNotes: 'Approved 90m overtime (2.5x multiplier hours = IDR 238,439) for payroll cycle.',
@@ -194,7 +206,7 @@ export class SeedService implements OnApplicationBootstrap {
               targetDate: today,
               reason: 'Weekly Hybrid WFH (1 Day/Week): Completing monthly tax reconciliation & Q4 audit ledger from home workstation.',
               managerEmail: finDept?.managerEmail ?? 'manager.finance@dexagroup.com',
-              ccEmails: 'admin.hrd@dexagroup.com, siti.rahma@dexagroup.com',
+              ccEmails: 'admin.hrd@dexagroup.com, employee.two@dexagroup.com',
               emailDispatched: true,
               status: ApprovalStatus.PENDING,
             }),
@@ -208,10 +220,79 @@ export class SeedService implements OnApplicationBootstrap {
 
   // Feature: Database Seeding & Default Demo Accounts — Purpose: Lifecycle hook invoked once TypeORM is connected; seeds data and ensures departments exist.
   // OOP: Domain Service Method (Encapsulated Business Operation) — Connected To: NestJS application bootstrap in employee-service.
+
+  // Feature: Master Manager Accounts Seeding — Purpose: Provisions official department manager demo accounts (Ir. Hendra Wijaya for IT, Drs. Bambang Hartono for Finance) with role MANAGER.
+  // OOP: Domain Service Method (Encapsulated Business Operation) — Connected To: Invoked during onApplicationBootstrap().
+  private async ensureManagerAccounts(): Promise<void> {
+    const managerAccounts = [
+      {
+        email: 'manager.it@dexagroup.com',
+        fullName: 'Manager One',
+        employeeCode: 'DEXA-MGR-001',
+        department: 'IT & Digital Innovation',
+        position: 'IT & Digital Innovation Manager',
+        baseSalary: 25000000,
+        phoneNumber: '+62 811-3300-101',
+        joinDate: '2019-04-01',
+      },
+      {
+        email: 'manager.finance@dexagroup.com',
+        fullName: 'Manager Two',
+        employeeCode: 'DEXA-MGR-002',
+        department: 'Finance & Accounting',
+        position: 'Finance & Accounting Manager',
+        baseSalary: 24000000,
+        phoneNumber: '+62 812-4400-202',
+        joinDate: '2018-09-15',
+      },
+    ];
+
+    const mgrPasswordHash = await bcrypt.hash('ManagerDexa2026!', 10);
+
+    for (const mgr of managerAccounts) {
+      let user = await this.userRepo.findOne({ where: { email: mgr.email } });
+      if (!user) {
+        user = await this.userRepo.save(
+          this.userRepo.create({
+            email: mgr.email,
+            passwordHash: mgrPasswordHash,
+            role: UserRole.MANAGER,
+            isVerified: true,
+            isActive: true,
+          }),
+        );
+        this.logger.log(`Provisioned Manager account: ${mgr.fullName} <${mgr.email}> (role: MANAGER)`);
+      } else if (user.role !== UserRole.MANAGER) {
+        user.role = UserRole.MANAGER;
+        await this.userRepo.save(user);
+      }
+
+      let employee = await this.employeeRepo.findOne({ where: { email: mgr.email } });
+      if (!employee) {
+        await this.employeeRepo.save(
+          this.employeeRepo.create({
+            userId: user.id,
+            employeeCode: mgr.employeeCode,
+            fullName: mgr.fullName,
+            email: mgr.email,
+            department: mgr.department,
+            position: mgr.position,
+            baseSalary: mgr.baseSalary,
+            phoneNumber: mgr.phoneNumber,
+            joinDate: mgr.joinDate,
+            status: EmployeeStatus.ACTIVE,
+          }),
+        );
+        this.logger.log(`Linked employee record for Manager: ${mgr.employeeCode} (${mgr.fullName})`);
+      }
+    }
+  }
+
   async onApplicationBootstrap(): Promise<void> {
     const existingCount = await this.userRepo.count();
     if (existingCount > 0) {
       await this.ensureDepartmentsAndPayrollBackfill();
+      await this.ensureManagerAccounts();
       const existingSysAdmin = await this.userRepo.findOne({ where: { role: UserRole.SYSTEM_ADMIN } });
       if (!existingSysAdmin) {
         this.logger.log('Provisioning System Administrator account (Abdurrahman Khairi <sysadmin@dexagroup.com>)...');
@@ -271,7 +352,7 @@ export class SeedService implements OnApplicationBootstrap {
         role: UserRole.HR_ADMIN,
         isVerified: true,
         employeeCode: 'DEXA-2026-001',
-        fullName: 'Dr. Rina Kusuma, M.Psi',
+        fullName: 'HR Admin One',
         department: 'HRD & People Operations',
         position: 'Head of People & Culture',
         baseSalary: 20000000,
@@ -279,12 +360,12 @@ export class SeedService implements OnApplicationBootstrap {
         joinDate: '2021-03-15',
       },
       {
-        email: 'budi.santoso@dexagroup.com',
+        email: 'employee.one@dexagroup.com',
         passwordHash: empPasswordHash,
         role: UserRole.EMPLOYEE,
         isVerified: true,
         employeeCode: 'DEXA-2026-002',
-        fullName: 'Budi Santoso, S.Kom',
+        fullName: 'Employee One',
         department: 'IT & Digital Innovation',
         position: 'Senior Fullstack Engineer',
         baseSalary: 16500000,
@@ -292,12 +373,12 @@ export class SeedService implements OnApplicationBootstrap {
         joinDate: '2022-07-01',
       },
       {
-        email: 'siti.rahmawati@dexagroup.com',
+        email: 'employee.two@dexagroup.com',
         passwordHash: empPasswordHash,
         role: UserRole.EMPLOYEE,
         isVerified: true,
         employeeCode: 'DEXA-2026-003',
-        fullName: 'Siti Rahmawati, S.E.',
+        fullName: 'Employee Two',
         department: 'Finance & Accounting',
         position: 'Corporate Financial Analyst',
         baseSalary: 13500000,
@@ -305,12 +386,12 @@ export class SeedService implements OnApplicationBootstrap {
         joinDate: '2023-01-10',
       },
       {
-        email: 'andi.pratama@dexagroup.com',
+        email: 'employee.three@dexagroup.com',
         passwordHash: empPasswordHash,
         role: UserRole.EMPLOYEE,
         isVerified: true,
         employeeCode: 'DEXA-2026-004',
-        fullName: 'apt. Andi Pratama, S.Farm',
+        fullName: 'Employee Three',
         department: 'Quality Assurance & R&D',
         position: 'Pharmaceutical QA Specialist',
         baseSalary: 14500000,
@@ -318,12 +399,12 @@ export class SeedService implements OnApplicationBootstrap {
         joinDate: '2023-08-20',
       },
       {
-        email: 'nadia.putri@dexagroup.com',
+        email: 'employee.four@dexagroup.com',
         passwordHash: empPasswordHash,
         role: UserRole.EMPLOYEE,
         isVerified: false,
         employeeCode: 'DEXA-2026-005',
-        fullName: 'Nadia Putri Maharani',
+        fullName: 'Employee Four',
         department: 'IT & Digital Innovation',
         position: 'UI/UX Product Designer',
         baseSalary: 12500000,
