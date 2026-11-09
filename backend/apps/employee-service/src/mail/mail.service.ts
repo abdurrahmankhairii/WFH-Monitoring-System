@@ -33,8 +33,8 @@ export class MailService {
   private readonly developerEmail: string;
 
   constructor(private readonly config: ConfigService) {
-    const host = this.config.get<string>('SMTP_HOST', 'localhost');
-    const port = Number(this.config.get<string>('SMTP_PORT', '1025'));
+    const host = this.config.get<string>('SMTP_HOST', 'smtp.gmail.com');
+    const port = Number(this.config.get<string>('SMTP_PORT', '587'));
     const user = this.config.get<string>('SMTP_USER', '');
     const pass = this.config.get<string>('SMTP_PASS', '');
     const secure = this.config.get<string>('SMTP_SECURE', 'false') === 'true' || port === 465;
@@ -78,8 +78,8 @@ export class MailService {
   async sendTestEmail(targetEmail: string): Promise<{ success: boolean; message: string; messageId?: string }> {
     const override = this.config.get<string>('SMTP_OVERRIDE_RECIPIENT');
     const actualRecipient = override || targetEmail;
-    const host = this.config.get<string>('SMTP_HOST', 'localhost');
-    const port = this.config.get<string>('SMTP_PORT', '1025');
+    const host = this.config.get<string>('SMTP_HOST', 'smtp.gmail.com');
+    const port = this.config.get<string>('SMTP_PORT', '587');
     const user = this.config.get<string>('SMTP_USER', '');
 
     const testHtml = this.wrapEmailTemplate(
@@ -94,7 +94,7 @@ export class MailService {
         <table style="width:100%;border-collapse:collapse;font-size:13px;color:#334155;margin-bottom:16px;">
           <tr><td style="padding:6px 0;width:150px;color:#64748B;">SMTP Host:</td><td style="font-weight:600;">${host}</td></tr>
           <tr><td style="padding:6px 0;color:#64748B;">SMTP Port:</td><td style="font-weight:600;">${port}</td></tr>
-          <tr><td style="padding:6px 0;color:#64748B;">Authenticated Sender:</td><td style="font-weight:600;">${user || 'Anonymous / Local Mailpit'}</td></tr>
+          <tr><td style="padding:6px 0;color:#64748B;">Authenticated Sender:</td><td style="font-weight:600;">${user || 'Anonymous (no SMTP_USER set)'}</td></tr>
           <tr><td style="padding:6px 0;color:#64748B;">Target Recipient:</td><td style="font-weight:600;">${actualRecipient}${override ? ` (Forwarded from ${targetEmail})` : ''}</td></tr>
           <tr><td style="padding:6px 0;color:#64748B;">Server Timestamp:</td><td style="font-weight:600;">${new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })} WIB</td></tr>
         </table>

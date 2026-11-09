@@ -59,8 +59,8 @@ export class AttendanceRequestsService {
     private readonly attendanceService: AttendanceService,
     private readonly config: ConfigService,
   ) {
-    const host = this.config.get<string>('SMTP_HOST', 'localhost');
-    const port = Number(this.config.get<string>('SMTP_PORT', '1025'));
+    const host = this.config.get<string>('SMTP_HOST', 'smtp.gmail.com');
+    const port = Number(this.config.get<string>('SMTP_PORT', '587'));
     const secure = this.config.get<string>('SMTP_SECURE', 'false') === 'true' || port === 465;
     const user = this.config.get<string>('SMTP_USER', '');
     const pass = this.config.get<string>('SMTP_PASS', '');
@@ -68,15 +68,32 @@ export class AttendanceRequestsService {
     this.smtpUser = user;
     this.smtpFrom = this.config.get<string>('SMTP_FROM', '');
 
-    this.transporter = nodemailer.createTransport({
+    const transportOptions: any = {
       host,
       port,
       secure,
-      ...(user && pass ? { auth: { user, pass } } : {}),
       tls: {
         rejectUnauthorized: false,
       },
-    });
+    };
+
+    if (user && pass) {
+      transportOptions.auth = { user, pass };
+    }
+
+    // Feature: Real SMTP Tuning — Purpose: Configures TLS handshake requirements for Google Gmail and Microsoft Outlook.
+    // OOP: Strategy Adapter — Connected To: Google SMTP (smtp.gmail.com:587) and Microsoft Office 365 (smtp.office365.com:587).
+    if (host.includes('gmail.com')) {
+      transportOptions.requireTLS = true;
+    } else if (host.includes('office365.com') || host.includes('outlook.com')) {
+      transportOptions.requireTLS = true;
+      transportOptions.tls = {
+        ciphers: 'SSLv3',
+        rejectUnauthorized: false,
+      };
+    }
+
+    this.transporter = nodemailer.createTransport(transportOptions);
     this.logger.log(`Initialized AttendanceRequestsService with SMTP: ${host}:${port} (secure: ${secure}, auth: ${Boolean(user && pass)})`);
   }
 
@@ -540,18 +557,39 @@ export class AttendanceRequestsService {
       ? `"${employee.fullName} (via Dexa WFH)" <${this.smtpFrom || this.smtpUser}>`
       : `"${employee.fullName} (${employee.employeeCode})" <${employee.email}>`;
 
+    const overrideRecipient = this.config.get<string>('SMTP_OVERRIDE_RECIPIENT');
+    let actualTo: string = managerEmail;
+    let actualCc: string[] | undefined = ccList;
+    let actualHtml = html;
+
+    // Feature: Smart Recipient Routing for Demo Accounts — Delivers WFH approval requests directly to evaluation inbox.
+    // OOP: Strategy Pattern (Conditional Decorator) — Connected To: SMTP_OVERRIDE_RECIPIENT env config.
+    if (overrideRecipient) {
+      actualTo = overrideRecipient;
+      actualCc = undefined;
+      actualHtml = actualHtml.replace(
+        '<div style="padding:24px;color:#1e293b;">',
+        `<div style="padding:24px;color:#1e293b;">
+          <div style="background:#FEF3C7;border:1px solid #F59E0B;padding:10px 14px;border-radius:8px;margin-bottom:16px;font-size:12px;color:#92400E;font-family:sans-serif;line-height:1.4;">
+            <strong>⚠️ WFH System Demonstration Routing:</strong><br/>
+            Intended demo recipient: <code>${managerEmail}</code> (CC: <code>${ccList.join(', ')}</code>)<br/>
+            Delivered directly to your evaluation inbox: <code>${overrideRecipient}</code>
+          </div>`,
+      );
+    }
+
     try {
       await this.transporter.sendMail({
         from: fromAddress,
         sender: employee.email,
         replyTo: `"${employee.fullName}" <${employee.email}>`,
-        to: managerEmail,
-        cc: ccList,
+        to: actualTo,
+        cc: actualCc,
         subject,
         text: `${subject}\nEmployee: ${employee.fullName} (${employee.employeeCode})\nDepartment: ${employee.department}\nTarget Date: ${targetDate}\nReason: ${reason}`,
-        html,
+        html: actualHtml,
       });
-      this.logger.log(`[SMTP_SUCCESS] Dispatched approval email -> to=${managerEmail} | cc=${ccList.join(', ')} | subject=${subject}`);
+      this.logger.log(`[SMTP_SUCCESS] Dispatched approval email -> to=${actualTo} | originalTo=${managerEmail} | subject=${subject}`);
       return true;
     } catch (error) {
       this.logger.error(`[SMTP_ERROR] Failed to send email to ${managerEmail}: ${(error as Error).message}`, (error as Error).stack);
@@ -601,17 +639,38 @@ export class AttendanceRequestsService {
       </div>
     `;
 
+    const overrideRecipient = this.config.get<string>('SMTP_OVERRIDE_RECIPIENT');
+    let actualTo: string = toEmail;
+    let actualCc: string[] | undefined = ccEmails;
+    let actualHtml = html;
+
+    // Feature: Smart Recipient Routing for Demo Accounts — Delivers HR decision emails directly to evaluation inbox.
+    // OOP: Strategy Pattern (Conditional Decorator) — Connected To: SMTP_OVERRIDE_RECIPIENT env config.
+    if (overrideRecipient) {
+      actualTo = overrideRecipient;
+      actualCc = undefined;
+      actualHtml = actualHtml.replace(
+        '<div style="padding:24px;color:#1e293b;">',
+        `<div style="padding:24px;color:#1e293b;">
+          <div style="background:#FEF3C7;border:1px solid #F59E0B;padding:10px 14px;border-radius:8px;margin-bottom:16px;font-size:12px;color:#92400E;font-family:sans-serif;line-height:1.4;">
+            <strong>⚠️ WFH System Demonstration Routing:</strong><br/>
+            Intended demo recipient: <code>${toEmail}</code> (CC: <code>${ccEmails.join(', ')}</code>)<br/>
+            Delivered directly to your evaluation inbox: <code>${overrideRecipient}</code>
+          </div>`,
+      );
+    }
+
     try {
       await this.transporter.sendMail({
         from: fromAddress,
         replyTo: reviewerEmail || 'admin.hrd@dexagroup.com',
-        to: toEmail,
-        cc: ccEmails,
+        to: actualTo,
+        cc: actualCc,
         subject,
         text: `Your ${req.requestType} request for ${req.targetDate} has been marked as ${req.status}. Notes: ${req.reviewNotes ?? 'None'}.`,
-        html,
+        html: actualHtml,
       });
-      this.logger.log(`[SMTP_SUCCESS] Dispatched decision email -> to=${toEmail} | status=${req.status}`);
+      this.logger.log(`[SMTP_SUCCESS] Dispatched decision email -> to=${actualTo} | originalTo=${toEmail} | status=${req.status}`);
     } catch (error) {
       this.logger.error(`[SMTP_ERROR] Failed to send decision email to ${toEmail}: ${(error as Error).message}`, (error as Error).stack);
     }
