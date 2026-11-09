@@ -17,3 +17,4 @@ export * from './response/rpc-exception.filter';
 export * from './utils/duration.util';
 export * from './utils/attendance-rules';
 export * from './utils/time.util';
+export * from './utils/reverse-geocoding.util';

@@ -13,10 +13,11 @@ export interface JwtPayload {
   role: UserRole;
   employeeId: string | null;
   fullName: string;
+  department?: string;
   tokenType: 'access' | 'refresh';
 }
 
-// Feature: and audit fields in Feature #4/#8 — Purpose: Minimal authenticated actor context forwarded from the gateway to microservices for authorization & auditing.
+// Feature: Authenticated Actor Context — Purpose: Minimal authenticated actor context forwarded from the gateway to microservices for authorization, department routing, and file structuring.
 // OOP: Structural Contract (Interface Definition) — Connected To: Every gateway controller that forwards { actor } in TCP payloads; consumed by service methods.
 export interface ActorContext {
   userId: string;
@@ -24,4 +25,5 @@ export interface ActorContext {
   role: UserRole;
   employeeId: string | null;
   fullName: string;
+  department?: string;
 }

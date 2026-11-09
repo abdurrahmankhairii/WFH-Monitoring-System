@@ -33,6 +33,9 @@ export const EMPLOYEE_PATTERNS = {
   DEPARTMENTS: { cmd: 'employee.departments' },
   DEPARTMENT_DIRECTORY: { cmd: 'employee.department_directory' },
   RESEND_VERIFICATION: { cmd: 'employee.resend_verification' },
+  ENROLL_FACE: { cmd: 'employee.enroll_face' },
+  TOGGLE_SIBLING_EXEMPTION: { cmd: 'employee.toggle_sibling_exemption' },
+  UPDATE_PROFILE: { cmd: 'employee.update_profile' },
 } as const;
 
 export const ACCESS_REQUEST_PATTERNS = {
@@ -45,6 +48,18 @@ export const SUPPORT_PATTERNS = {
   CONTACT_DEVELOPER: { cmd: 'support.contact_developer' },
   FIND_TICKETS: { cmd: 'support.find_tickets' },
   RESOLVE: { cmd: 'support.resolve' },
+  TEST_EMAIL: { cmd: 'support.test_email' },
+} as const;
+
+// Feature: System Administrator Database Studio — Purpose: TCP message patterns for raw relational database CRUD operations across all tables.
+// OOP: Stateless Utility Dictionary (Constants Record) — Connected To: backend/apps/api-gateway/src/database-management and backend/apps/employee-service/src/database-management.
+export const DATABASE_PATTERNS = {
+  GET_TABLES: { cmd: 'database.get_tables' },
+  GET_ROWS: { cmd: 'database.get_rows' },
+  GET_ROW: { cmd: 'database.get_row' },
+  INSERT_ROW: { cmd: 'database.insert_row' },
+  UPDATE_ROW: { cmd: 'database.update_row' },
+  DELETE_ROW: { cmd: 'database.delete_row' },
 } as const;
 
 // Feature: Microservice TCP Message Patterns — Purpose: TCP message patterns for the Attendance microservice (port 3002).
@@ -61,6 +76,7 @@ export const ATTENDANCE_PATTERNS = {
   EXPORT: { cmd: 'attendance.export' },
   GET_POLICY: { cmd: 'attendance.get_policy' },
   UPDATE_POLICY: { cmd: 'attendance.update_policy' },
+  VERIFY_FACE_PREVIEW: { cmd: 'attendance.verify_face_preview' },
 } as const;
 
 export const ATTENDANCE_REQUEST_PATTERNS = {

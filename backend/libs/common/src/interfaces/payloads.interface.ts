@@ -3,7 +3,7 @@
 // Created strictly for Technical Assessment evaluation.
 // Unauthorized commercial use, modification, or distribution is prohibited.
 // ============================================================================
-import { PhotoCaptureSource } from '../constants/enums';
+import { LocationStatus, PhotoCaptureSource, VerificationMethod, VerificationStatus } from '../constants/enums';
 import {
   AccessRequestQueryDto,
   ApproveAccessRequestDto,
@@ -20,6 +20,8 @@ import {
   ReviewAttendanceRequestDto,
   UpdateEmployeeDto,
   UpdatePolicyDto,
+  UpdateMyProfileDto,
+  ToggleSiblingExemptionDto,
 } from '../dto';
 import { ActorContext } from './auth.interface';
 
@@ -36,6 +38,10 @@ export interface IdActorPayload extends ActorPayload {
 
 export interface ChangePasswordPayload extends ActorPayload {
   dto: ChangePasswordDto;
+}
+
+export interface UpdateMyProfilePayload extends ActorPayload {
+  dto: UpdateMyProfileDto;
 }
 
 export interface EmployeeQueryPayload extends ActorPayload {
@@ -80,11 +86,39 @@ export interface ClockInPayload extends ActorPayload {
   dailyPlan: string | null;
   ipAddress: string | null;
   deviceInfo: string | null;
+  verificationMethod?: VerificationMethod;
+  verificationStatus?: VerificationStatus;
+  livenessScore?: number | null;
+  similarityScore?: number | null;
+  isFaceMatched?: boolean;
+  probeEmbedding?: number[] | null;
+  imageHash?: string | null;
+  imagePhash?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  address?: string | null;
+  distanceFromHomeMeters?: number | null;
+  locationStatus?: LocationStatus | null;
+  deviceIssueReason?: string | null;
 }
 
 export interface ClockOutPayload extends ActorPayload {
   photo: PhotoProofPayload;
   dailyAccomplishment: string;
+  verificationMethod?: VerificationMethod;
+  verificationStatus?: VerificationStatus;
+  livenessScore?: number | null;
+  similarityScore?: number | null;
+  isFaceMatched?: boolean;
+  probeEmbedding?: number[] | null;
+  imageHash?: string | null;
+  imagePhash?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  address?: string | null;
+  distanceFromHomeMeters?: number | null;
+  locationStatus?: LocationStatus | null;
+  deviceIssueReason?: string | null;
 }
 
 export interface MyHistoryPayload extends ActorPayload {
@@ -127,4 +161,9 @@ export interface ExportFileResult {
   mimeType: string;
   base64: string;
   rowCount: number;
+}
+// Feature: Biometric Sibling Exemption — Purpose: TCP payload contract for toggling employee biometric sibling exemption.
+// OOP: Structural Contract (Interface Definition) — Connected To: API Gateway PATCH /api/employees/:id/sibling-exemption <-> employee-service.
+export interface ToggleSiblingExemptionPayload extends IdActorPayload {
+  dto: ToggleSiblingExemptionDto;
 }

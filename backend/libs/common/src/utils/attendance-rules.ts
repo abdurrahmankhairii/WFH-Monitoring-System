@@ -145,3 +145,43 @@ export function verifyPhotoTimestamp(input: PhotoTimestampInput): boolean {
   const sameDay = toJakartaDateString(capturedAt) === toJakartaDateString(serverNow);
   return sameDay && diffMinutes >= -5 && diffMinutes <= maxAgeMinutes;
 }
+
+
+// Feature: Geolocation Geofencing — Purpose: Computes distance in meters between two GPS coordinates using the Haversine formula.
+// OOP: Stateless Utility Function (Functional Helper) — Connected To: AttendanceService and AttendanceController geofencing verification.
+export function calculateHaversineDistanceMeters(
+  lat1: number,
+  lon1: number,
+  lat2: number,
+  lon2: number,
+): number {
+  const R = 6371e3; // Earth radius in meters
+  const phi1 = (lat1 * Math.PI) / 180;
+  const phi2 = (lat2 * Math.PI) / 180;
+  const deltaPhi = ((lat2 - lat1) * Math.PI) / 180;
+  const deltaLambda = ((lon2 - lon1) * Math.PI) / 180;
+
+  const a =
+    Math.sin(deltaPhi / 2) * Math.sin(deltaPhi / 2) +
+    Math.cos(phi1) * Math.cos(phi2) * Math.sin(deltaLambda / 2) * Math.sin(deltaLambda / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+  return Math.round(R * c);
+}
+
+// Feature: Anti-Cheat Perceptual Hashing — Purpose: Computes Hamming distance between two 16-hex perceptual hash strings (aHash/pHash).
+// OOP: Stateless Utility Function (Functional Helper) — Connected To: AttendanceService anti-duplicate validation pipeline.
+export function computeHammingDistance(hashA: string, hashB: string): number {
+  if (!hashA || !hashB || hashA.length !== hashB.length) return 64;
+  let dist = 0;
+  for (let i = 0; i < hashA.length; i++) {
+    const valA = parseInt(hashA[i], 16);
+    const valB = parseInt(hashB[i], 16);
+    let xor = valA ^ valB;
+    while (xor > 0) {
+      dist += xor & 1;
+      xor >>= 1;
+    }
+  }
+  return dist;
+}
