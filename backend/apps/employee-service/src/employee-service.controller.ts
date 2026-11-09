@@ -14,6 +14,7 @@ import {
   ChangePasswordPayload,
   ContactDeveloperPayload,
   CreateEmployeePayload,
+  DATABASE_PATTERNS,
   EMPLOYEE_PATTERNS,
   EmailOnlyDto,
   EmployeeQueryPayload,
@@ -25,15 +26,18 @@ import {
   ResetPasswordDto,
   SUPPORT_PATTERNS,
   UpdateEmployeePayload,
+  UpdateMyProfilePayload,
+  ToggleSiblingExemptionPayload,
   VerifyAccountDto,
 } from '@app/common';
 import { AccessRequestsService } from './access-requests/access-requests.service';
 import { AuthService } from './auth/auth.service';
+import { DatabaseManagementService } from './database-management/database-management.service';
 import { EmployeesService } from './employees/employees.service';
 import { SupportService } from './support/support.service';
 
-// Feature: covering s #1, #4, #10 — Purpose: TCP microservice controller exposing all Auth, Master Employee CRUD, Access Request, and Support handlers on TCP :3001.
-// OOP: API Gateway Controller (HTTP Ingress Adapter) — Connected To: Receives TCP messages from backend/apps/api-gateway/src/**/*.controller.ts -> Delegates to AuthService,.
+// Feature: Core Microservice Architecture — Purpose: TCP microservice controller exposing all Auth, Master Employee CRUD, Access Request, Support, and Database Management handlers on TCP :3001.
+// OOP: API Gateway Controller (HTTP Ingress Adapter) — Connected To: Receives TCP messages from backend/apps/api-gateway/src/**/*.controller.ts -> Delegates to services.
 @Controller()
 export class EmployeeServiceController {
   constructor(
@@ -41,6 +45,7 @@ export class EmployeeServiceController {
     private readonly employeesService: EmployeesService,
     private readonly accessRequestsService: AccessRequestsService,
     private readonly supportService: SupportService,
+    private readonly databaseManagementService: DatabaseManagementService,
   ) {}
 
   // Feature: Core System Architecture — Purpose: Handles TCP `auth.login` message from API Gateway.
@@ -128,7 +133,15 @@ export class EmployeeServiceController {
   }
 
   // Feature: Core System Architecture — Purpose: Handles TCP `employee.update` message.
-  // OOP: Message Handler (TCP Request Handler) — Connected To: EmployeesService.update() -> PATCH /api/employees/:id.
+  // OOP: Message Handler (TCP Request Handler) — Connected To: EmployeesService.update() -> PUT /api/employees/:id.
+
+  // Feature: Self-Service Employee Profile Update — Purpose: Handles TCP employee.update_profile message from api-gateway.
+  // OOP: Microservice Message Pattern Handler — Connected To: TCP `employee.update_profile` from api-gateway.
+  @MessagePattern(EMPLOYEE_PATTERNS.UPDATE_PROFILE)
+  updateProfile(@Payload() payload: UpdateMyProfilePayload) {
+    return this.employeesService.updateProfile(payload);
+  }
+
   @MessagePattern(EMPLOYEE_PATTERNS.UPDATE)
   updateEmployee(@Payload() payload: UpdateEmployeePayload) {
     return this.employeesService.update(payload);
@@ -155,19 +168,34 @@ export class EmployeeServiceController {
     return this.employeesService.getDepartments();
   }
 
-  // Feature: Master Department Approval Directory — Purpose: Handles TCP `employee.department_directory` message for Manager email & WFH quota lookup.
+  // Feature: Core System Architecture — Purpose: Handles TCP `employee.department_directory` message.
   // OOP: Message Handler (TCP Request Handler) — Connected To: EmployeesService.getDepartmentDirectory() -> GET /api/employees/department-directory.
   @MessagePattern(EMPLOYEE_PATTERNS.DEPARTMENT_DIRECTORY)
   getDepartmentDirectory() {
     return this.employeesService.getDepartmentDirectory();
   }
 
-  // Feature: Core System Architecture — Purpose: Handles TCP `employee.resend_verification` message triggered by HRD Admin.
-  // OOP: Message Handler (TCP Request Handler) — Connected To: EmployeesService.resendVerificationByAdmin() -> POST /api/employees/:id/resend-otp.
+  // Feature: Core System Architecture — Purpose: Handles TCP `employee.resend_verification` message.
+  // OOP: Message Handler (TCP Request Handler) — Connected To: EmployeesService.resendVerificationByAdmin() -> POST /api/employees/:id/resend-verification.
   @MessagePattern(EMPLOYEE_PATTERNS.RESEND_VERIFICATION)
-  resendEmployeeOtp(@Payload() payload: IdActorPayload) {
+  resendEmployeeVerification(@Payload() payload: IdActorPayload) {
     return this.employeesService.resendVerificationByAdmin(payload);
   }
+
+  // Feature: Core System Architecture — Purpose: Handles TCP `employee.enroll_face` message.
+  // OOP: Message Handler (TCP Request Handler) — Connected To: EmployeesService.enrollFace() -> POST /api/employees/me/enroll-face.
+  @MessagePattern(EMPLOYEE_PATTERNS.ENROLL_FACE)
+  enrollFace(@Payload() payload: any) {
+    return this.employeesService.enrollFace(payload);
+  }
+
+  // Feature: Biometric Sibling Exemption — Purpose: Handles TCP `employee.toggle_sibling_exemption` message.
+  // OOP: Message Handler (TCP Request Handler) — Connected To: EmployeesService.toggleSiblingExemption() -> PATCH /api/employees/:id/sibling-exemption.
+  @MessagePattern(EMPLOYEE_PATTERNS.TOGGLE_SIBLING_EXEMPTION)
+  toggleSiblingExemption(@Payload() payload: ToggleSiblingExemptionPayload) {
+    return this.employeesService.toggleSiblingExemption(payload);
+  }
+
 
   // Feature: Core System Architecture — Purpose: Handles TCP `access_request.find_all` message.
   // OOP: Message Handler (TCP Request Handler) — Connected To: AccessRequestsService.findAll() -> GET /api/access-requests.
@@ -209,5 +237,54 @@ export class EmployeeServiceController {
   @MessagePattern(SUPPORT_PATTERNS.RESOLVE)
   resolveSupportTicket(@Payload() payload: IdActorPayload) {
     return this.supportService.resolveTicket(payload);
+  }
+
+  // Feature: SMTP Diagnostic Testing — Purpose: Handles TCP `support.test_email` message to test real-world SMTP handshake.
+  // OOP: Message Handler (TCP Request Handler) — Connected To: SupportService.testEmail() -> POST /api/support/test-email.
+  @MessagePattern(SUPPORT_PATTERNS.TEST_EMAIL)
+  testEmail(@Payload() payload: { actor: ActorPayload; targetEmail?: string }) {
+    return this.supportService.testEmail(payload);
+  }
+
+  // Feature: System Administrator Database Studio — Purpose: Handles TCP `database.get_tables` message returning schemas and counts for all 9 tables.
+  // OOP: Message Handler (TCP Request Handler) — Connected To: DatabaseManagementService.getTables() -> GET /api/system/database/tables.
+  @MessagePattern(DATABASE_PATTERNS.GET_TABLES)
+  getDatabaseTables() {
+    return this.databaseManagementService.getTables();
+  }
+
+  // Feature: System Administrator Database Studio — Purpose: Handles TCP `database.get_rows` message returning paginated, filtered rows.
+  // OOP: Message Handler (TCP Request Handler) — Connected To: DatabaseManagementService.getTableRows() -> GET /api/system/database/:tableName.
+  @MessagePattern(DATABASE_PATTERNS.GET_ROWS)
+  getDatabaseTableRows(@Payload() payload: { tableName: string; options: any }) {
+    return this.databaseManagementService.getTableRows(payload.tableName, payload.options);
+  }
+
+  // Feature: System Administrator Database Studio — Purpose: Handles TCP `database.get_row` message looking up a single row by primary key.
+  // OOP: Message Handler (TCP Request Handler) — Connected To: DatabaseManagementService.getRow() -> GET /api/system/database/:tableName/:id.
+  @MessagePattern(DATABASE_PATTERNS.GET_ROW)
+  getDatabaseTableRow(@Payload() payload: { tableName: string; id: string }) {
+    return this.databaseManagementService.getRow(payload.tableName, payload.id);
+  }
+
+  // Feature: System Administrator Database Studio — Purpose: Handles TCP `database.insert_row` message inserting a validated row.
+  // OOP: Message Handler (TCP Request Handler) — Connected To: DatabaseManagementService.insertRow() -> POST /api/system/database/:tableName.
+  @MessagePattern(DATABASE_PATTERNS.INSERT_ROW)
+  insertDatabaseTableRow(@Payload() payload: { tableName: string; data: Record<string, any> }) {
+    return this.databaseManagementService.insertRow(payload.tableName, payload.data);
+  }
+
+  // Feature: System Administrator Database Studio — Purpose: Handles TCP `database.update_row` message updating row fields safely.
+  // OOP: Message Handler (TCP Request Handler) — Connected To: DatabaseManagementService.updateRow() -> PUT /api/system/database/:tableName/:id.
+  @MessagePattern(DATABASE_PATTERNS.UPDATE_ROW)
+  updateDatabaseTableRow(@Payload() payload: { tableName: string; id: string; data: Record<string, any> }) {
+    return this.databaseManagementService.updateRow(payload.tableName, payload.id, payload.data);
+  }
+
+  // Feature: System Administrator Database Studio — Purpose: Handles TCP `database.delete_row` message removing a row by primary key.
+  // OOP: Message Handler (TCP Request Handler) — Connected To: DatabaseManagementService.deleteRow() -> DELETE /api/system/database/:tableName/:id.
+  @MessagePattern(DATABASE_PATTERNS.DELETE_ROW)
+  deleteDatabaseTableRow(@Payload() payload: { tableName: string; id: string }) {
+    return this.databaseManagementService.deleteRow(payload.tableName, payload.id);
   }
 }

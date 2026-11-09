@@ -37,6 +37,13 @@ export class AttendanceServiceController {
 
   // Feature: #6, #7 — Purpose: Handles TCP `attendance.clock_in` message.
   // OOP: Message Handler (TCP Request Handler) — Connected To: AttendanceService.clockIn() -> POST /api/attendances/clock-in.
+  // Feature: Pre-Liveness Face Verification — Purpose: Handles TCP `attendance.verify_face_preview` for instant InsightFace identity matching.
+  // OOP: Message Handler (TCP Request Handler) — Connected To: AttendanceService.verifyFacePreview() -> POST /api/attendances/verify-face-preview.
+  @MessagePattern(ATTENDANCE_PATTERNS.VERIFY_FACE_PREVIEW)
+  verifyFacePreview(@Payload() payload: { actor: any; probeEmbedding?: number[] | null }) {
+    return this.attendanceService.verifyFacePreview(payload);
+  }
+
   @MessagePattern(ATTENDANCE_PATTERNS.CLOCK_IN)
   clockIn(@Payload() payload: ClockInPayload) {
     return this.attendanceService.clockIn(payload);
