@@ -4,7 +4,7 @@
 # Unauthorized commercial use, modification, or distribution is prohibited.
 # ============================================================================
 # Dexa Group — WFH Attendance & Employee Monitoring System
-# Full-Stack Microservices Orchestration (MySQL 8.0 + Mailpit SMTP + 3 NestJS Microservices + React Frontend)
+# Full-Stack Microservices Orchestration (MySQL 8.0 + Mailpit + FastAPI Biometric + 3 NestJS Microservices + React Frontend)
 
 services:
   mysql:
@@ -35,6 +35,24 @@ services:
       - "1025:1025" # SMTP Server Port
       - "8025:8025" # Web UI Inbox (View OTP & Contact Developer Emails)
 
+  biometric-service:
+    build:
+      context: ./biometric-service
+      dockerfile: Dockerfile
+    container_name: dexa-wfh-biometric-service
+    restart: unless-stopped
+    environment:
+      INSIGHTFACE_HOME: /root/.insightface
+    volumes:
+      - ${USERPROFILE:-~}/.insightface:/root/.insightface:ro
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   employee-service:
     build:
       context: ./backend
@@ -47,6 +65,8 @@ services:
         condition: service_healthy
       mailpit:
         condition: service_started
+      biometric-service:
+        condition: service_healthy
     environment:
       DB_TYPE: ${DB_TYPE:-mysql}
       DB_HOST: mysql
@@ -57,12 +77,16 @@ services:
       DB_SYNCHRONIZE: "true"
       EMPLOYEE_SERVICE_HOST: 0.0.0.0
       EMPLOYEE_SERVICE_PORT: 3001
+      BIOMETRIC_SERVICE_URL: ${BIOMETRIC_SERVICE_URL:-http://biometric-service:8000}
       JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:-dexa-wfh-jwt-access-secret-2026-abdurrahman-khairi}
       JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-dexa-wfh-jwt-refresh-secret-2026-abdurrahman-khairi}
       OTP_EXPIRES_MINUTES: ${OTP_EXPIRES_MINUTES:-10}
-      SMTP_HOST: mailpit
-      SMTP_PORT: 1025
-      SMTP_SECURE: "false"
+      SMTP_HOST: ${SMTP_HOST:-mailpit}
+      SMTP_PORT: ${SMTP_PORT:-1025}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      SMTP_FROM: ${SMTP_FROM:-}
       SYSTEM_NOREPLY_EMAIL: ${SYSTEM_NOREPLY_EMAIL:-noreply-wfh@dexagroup.com}
       DEVELOPER_SUPPORT_EMAIL: ${DEVELOPER_SUPPORT_EMAIL:-abdurrahman.khairi@dexagroup.com}
     ports:
@@ -87,6 +111,8 @@ services:
         condition: service_started
       employee-service:
         condition: service_healthy
+      biometric-service:
+        condition: service_healthy
     environment:
       DB_TYPE: ${DB_TYPE:-mysql}
       DB_HOST: mysql
@@ -97,9 +123,15 @@ services:
       DB_SYNCHRONIZE: "false"
       ATTENDANCE_SERVICE_HOST: 0.0.0.0
       ATTENDANCE_SERVICE_PORT: 3002
-      SMTP_HOST: mailpit
-      SMTP_PORT: 1025
-      SMTP_SECURE: "false"
+      BIOMETRIC_SERVICE_URL: ${BIOMETRIC_SERVICE_URL:-http://biometric-service:8000}
+      SMTP_HOST: ${SMTP_HOST:-mailpit}
+      SMTP_PORT: ${SMTP_PORT:-1025}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      SYSTEM_NOREPLY_EMAIL: ${SYSTEM_NOREPLY_EMAIL:-noreply-wfh@dexagroup.com}
+      DEVELOPER_SUPPORT_EMAIL: ${DEVELOPER_SUPPORT_EMAIL:-abdurrahman.khairi@dexagroup.com}
       WORK_START_TIME: ${WORK_START_TIME:-08:30}
       LATE_GRACE_MINUTES: ${LATE_GRACE_MINUTES:-15}
       HALF_DAY_THRESHOLD_MINUTES: ${HALF_DAY_THRESHOLD_MINUTES:-240}
@@ -123,12 +155,15 @@ services:
         condition: service_healthy
       attendance-service:
         condition: service_healthy
+      biometric-service:
+        condition: service_healthy
     environment:
       API_GATEWAY_PORT: 3000
       EMPLOYEE_SERVICE_HOST: employee-service
       EMPLOYEE_SERVICE_PORT: 3001
       ATTENDANCE_SERVICE_HOST: attendance-service
       ATTENDANCE_SERVICE_PORT: 3002
+      BIOMETRIC_SERVICE_URL: ${BIOMETRIC_SERVICE_URL:-http://biometric-service:8000}
       JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:-dexa-wfh-jwt-access-secret-2026-abdurrahman-khairi}
       JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-dexa-wfh-jwt-refresh-secret-2026-abdurrahman-khairi}
       UPLOAD_DIR: /app/uploads

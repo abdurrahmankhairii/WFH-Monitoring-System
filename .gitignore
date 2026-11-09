@@ -180,3 +180,15 @@ Thumbs.db
 skill/
 AGENTS.md
 
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# Scratch and temporary scripts
+scratch/
+~$*
+
