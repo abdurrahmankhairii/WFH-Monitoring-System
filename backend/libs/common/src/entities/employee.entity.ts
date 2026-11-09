@@ -27,7 +27,7 @@ const BIGINT_NUMBER_TRANSFORMER = {
   from: (value?: string | number | null) => (value !== undefined && value !== null ? Number(value) : 12000000),
 };
 
-// Feature: Master Employee & Profile Entity — Purpose: Master employee profile (NIP, department, position, baseSalary) linked with users and departments.
+// Feature: Master Employee & Profile Entity — Purpose: Master employee profile (NIP, department, position, baseSalary, biometric face embedding, and geofencing home coordinates) linked with users.
 // OOP: Domain Entity (TypeORM Relational Model) — Connected To: employees.service.ts, attendance.service.ts, and employees table.
 @Entity('employees')
 @Index('IDX_employees_department', ['department'])
@@ -90,6 +90,33 @@ export class Employee {
 
   @Column({ name: 'avatar_url', type: 'text', nullable: true })
   avatarUrl: string | null;
+
+  @Column({ name: 'face_embedding', type: 'json', nullable: true })
+  faceEmbedding: number[] | null;
+
+  @Column({ name: 'face_enrolled_at', type: DATETIME_COLUMN, nullable: true })
+  faceEnrolledAt: Date | null;
+
+  @Column({ name: 'face_enrolled_photo_url', type: 'text', nullable: true })
+  faceEnrolledPhotoUrl: string | null;
+
+  @Column({ name: 'home_latitude', type: 'decimal', precision: 10, scale: 8, nullable: true })
+  homeLatitude: number | null;
+
+  @Column({ name: 'home_longitude', type: 'decimal', precision: 11, scale: 8, nullable: true })
+  homeLongitude: number | null;
+
+  @Column({ name: 'home_address', type: 'text', nullable: true })
+  homeAddress: string | null;
+
+  @Column({ name: 'is_sibling_exempt', type: 'boolean', default: false })
+  isSiblingExempt: boolean;
+
+  @Column({ name: 'sibling_exempt_reason', type: 'text', nullable: true })
+  siblingExemptReason: string | null;
+
+  @Column({ name: 'sibling_exempt_approved_by', type: 'varchar', length: 150, nullable: true })
+  siblingExemptApprovedBy: string | null;
 
   @OneToMany(() => Attendance, (attendance) => attendance.employee)
   attendances?: Attendance[];
