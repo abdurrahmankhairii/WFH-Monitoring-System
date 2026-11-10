@@ -30,6 +30,7 @@ export class MailService {
   private readonly logger = new Logger(MailService.name);
   private readonly transporter: Transporter;
   private readonly systemFrom: string;
+  private readonly authenticatedSender: string;
   private readonly developerEmail: string;
 
   constructor(private readonly config: ConfigService) {
@@ -38,10 +39,11 @@ export class MailService {
     const user = this.config.get<string>('SMTP_USER', '');
     const pass = this.config.get<string>('SMTP_PASS', '');
     const secure = this.config.get<string>('SMTP_SECURE', 'false') === 'true' || port === 465;
+    const fromSetting = this.config.get<string>('SMTP_FROM', '');
 
-    this.systemFrom =
-      this.config.get<string>('SMTP_FROM') ||
-      (user ? `"Dexa Group WFH Monitoring" <${user}>` : '"Dexa Group WFH Monitoring" <noreply-wfh@dexagroup.com>');
+    // With a real SMTP login, every email goes out from the bare signed in address (like the Pertamina mailer).
+    this.authenticatedSender = user && pass ? this.extractAddress(user) || this.extractAddress(fromSetting) : '';
+    this.systemFrom = this.authenticatedSender || fromSetting || '"Dexa Group WFH Monitoring" <noreply-wfh@dexagroup.com>';
     this.developerEmail = this.config.get<string>('DEVELOPER_SUPPORT_EMAIL', 'abdurrahman.khairi@dexagroup.com');
 
     const transportOptions: any = {
@@ -164,12 +166,29 @@ export class MailService {
       `,
     );
 
-    return this.safeSend({
+    const text = [
+      `Hello ${params.fullName}${params.employeeCode ? ` (${params.employeeCode})` : ''},`,
+      '',
+      `Your Dexa WFH ${isVerification ? 'account verification' : 'password reset'} code is ${params.otpCode}.`,
+      'It is valid for 15 minutes and can be used once.',
+      isVerification
+        ? 'Enter it on the Verify Account screen to set your password and activate your account.'
+        : 'Enter it on the Reset Password screen. If you did not ask for a reset, ignore this email.',
+      '',
+      '© 2026 Abdurrahman Khairi - Created strictly for Technical Assessment evaluation. Unauthorized commercial use is prohibited',
+    ].join('\n');
+
+    const delivered = await this.safeSend({
       from: this.systemFrom,
       to: params.toEmail,
       subject,
+      text,
       html,
     });
+    if (!delivered) {
+      this.logger.warn(`[OTP_FALLBACK] Email not delivered. ${params.type} OTP for ${params.toEmail} is ${params.otpCode} (valid 15 minutes).`);
+    }
+    return delivered;
   }
 
   // Feature: Core System Architecture — Purpose: Sends a "Contact Developer / Need Help" email where: - TO: System Administrator accounts - CC: HR Admin accounts & sender.
@@ -235,7 +254,6 @@ export class MailService {
   // OOP: Domain Service Method (Encapsulated Business Operation) — Connected To: All MailService public methods.
   private async safeSend(options: nodemailer.SendMailOptions): Promise<boolean> {
     try {
-      const smtpUser = this.config.get<string>('SMTP_USER', '');
       const overrideRecipient = this.config.get<string>('SMTP_OVERRIDE_RECIPIENT', '');
 
       let actualTo = options.to;
@@ -262,9 +280,13 @@ export class MailService {
         ...options,
         to: actualTo,
         html: actualHtml,
-        from: this.config.get<string>('SMTP_FROM') || (smtpUser ? `"Dexa Group WFH" <${smtpUser}>` : options.from),
+        from: this.authenticatedSender || this.config.get<string>('SMTP_FROM') || options.from,
         replyTo: options.replyTo || options.from,
       };
+      // A Sender header naming another domain does not match the signed in mailbox, so it is dropped under real SMTP.
+      if (this.authenticatedSender) {
+        delete mailOptions.sender;
+      }
 
       const info = await this.transporter.sendMail(mailOptions);
       this.logger.log(`[SMTP_SUCCESS] Dispatched email -> to=${String(mailOptions.to)} | from=${String(mailOptions.from)} | subject=${String(mailOptions.subject)} | id=${info.messageId}`);
@@ -274,5 +296,14 @@ export class MailService {
       this.logger.error(`[SMTP_ERROR] Failed to send email to ${String(options.to)}: ${errMsg}`, error instanceof Error ? error.stack : undefined);
       return false;
     }
+  }
+
+  // Feature: Sender Address Sanitization — Purpose: Returns the bare RFC 5322 address from a value such as "Name" <user@gmail.com>, or an empty string when there is none.
+  // OOP: Private Pure Helper Method — Connected To: MailService constructor (SMTP_USER, SMTP_FROM) and safeSend().
+  private extractAddress(raw: string): string {
+    if (!raw) return '';
+    const match = raw.match(/<([^>]+)>/);
+    const address = (match ? match[1] : raw).replace(/["']/g, '').trim();
+    return address.includes('@') ? address : '';
   }
 }
