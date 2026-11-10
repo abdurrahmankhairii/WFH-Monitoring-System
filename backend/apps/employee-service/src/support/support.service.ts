@@ -16,6 +16,7 @@ import {
   User,
   UserRole,
   buildResponse,
+  describeMailDispatch,
   throwRpcError,
 } from '@app/common';
 import { MailService } from '../mail/mail.service';
@@ -74,7 +75,7 @@ export class SupportService {
       ccEmails.push(senderEmail);
     }
 
-    const delivered = await this.mailService.sendContactDeveloperEmail({
+    const dispatch = await this.mailService.sendContactDeveloperEmail({
       senderEmail,
       senderName,
       senderRole: payload.actor.role,
@@ -88,15 +89,24 @@ export class SupportService {
       ccEmails,
     });
 
-    if (delivered) {
-      saved.emailDelivered = true;
-      await this.ticketRepo.save(saved);
+    const ticketLabel = `Ticket #${saved.id.slice(0, 8).toUpperCase()}`;
+    if (!dispatch.delivered) {
+      return buildResponse({
+        type: 'info',
+        where,
+        what: 'Support ticket saved, email not delivered',
+        why: `${ticketLabel} is saved in the ticket log. ${describeMailDispatch(dispatch)}`,
+        data: saved,
+      });
     }
+
+    saved.emailDelivered = true;
+    await this.ticketRepo.save(saved);
 
     return buildResponse({
       where,
       what: 'Support message sent to System Administrator & HR Admin',
-      why: `Ticket #${saved.id.slice(0, 8).toUpperCase()} dispatched via SMTP with sender "${senderName} <${senderEmail}>" to System Administrator (${toEmails.join(', ')}) with CC to HR Admin (${ccEmails.join(', ')}).`,
+      why: `${ticketLabel}: ${describeMailDispatch(dispatch)}`,
       data: saved,
     });
   }

@@ -6,7 +6,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { ALL_ENTITIES, DatabaseModule } from '@app/common';
+import { ALL_ENTITIES, DatabaseModule, SmtpMailerService } from '@app/common';
 import { AttendanceServiceController } from './attendance-service.controller';
 import { AttendanceService } from './attendance/attendance.service';
 import { ExportService } from './export/export.service';
@@ -21,6 +21,6 @@ import { AttendanceRequestsService } from './requests/attendance-requests.servic
     TypeOrmModule.forFeature(ALL_ENTITIES),
   ],
   controllers: [AttendanceServiceController],
-  providers: [AttendanceService, AttendanceRequestsService, ExportService],
+  providers: [SmtpMailerService, AttendanceService, AttendanceRequestsService, ExportService],
 })
 export class AttendanceServiceModule {}

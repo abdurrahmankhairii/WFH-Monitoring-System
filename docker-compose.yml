@@ -78,6 +78,9 @@ services:
       SMTP_PASS: ${SMTP_PASS:-}
       SMTP_FROM: ${SMTP_FROM:-}
       SMTP_OVERRIDE_RECIPIENT: ${SMTP_OVERRIDE_RECIPIENT:-}
+      SMTP_DEMO_DOMAINS: ${SMTP_DEMO_DOMAINS:-dexagroup.com,example.com}
+      SMTP_SENDER_MODE: ${SMTP_SENDER_MODE:-system}
+      SMTP_RELAY_SENDER_DOMAINS: ${SMTP_RELAY_SENDER_DOMAINS:-}
       SYSTEM_NOREPLY_EMAIL: ${SYSTEM_NOREPLY_EMAIL:-noreply-wfh@dexagroup.com}
       DEVELOPER_SUPPORT_EMAIL: ${DEVELOPER_SUPPORT_EMAIL:-abdurrahman.khairi@dexagroup.com}
     ports:
@@ -120,6 +123,9 @@ services:
       SMTP_PASS: ${SMTP_PASS:-}
       SMTP_FROM: ${SMTP_FROM:-}
       SMTP_OVERRIDE_RECIPIENT: ${SMTP_OVERRIDE_RECIPIENT:-}
+      SMTP_DEMO_DOMAINS: ${SMTP_DEMO_DOMAINS:-dexagroup.com,example.com}
+      SMTP_SENDER_MODE: ${SMTP_SENDER_MODE:-system}
+      SMTP_RELAY_SENDER_DOMAINS: ${SMTP_RELAY_SENDER_DOMAINS:-}
       SYSTEM_NOREPLY_EMAIL: ${SYSTEM_NOREPLY_EMAIL:-noreply-wfh@dexagroup.com}
       DEVELOPER_SUPPORT_EMAIL: ${DEVELOPER_SUPPORT_EMAIL:-abdurrahman.khairi@dexagroup.com}
       WORK_START_TIME: ${WORK_START_TIME:-08:30}

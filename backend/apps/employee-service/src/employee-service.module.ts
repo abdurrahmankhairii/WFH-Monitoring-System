@@ -7,7 +7,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { ALL_ENTITIES, DatabaseModule } from '@app/common';
+import { ALL_ENTITIES, DatabaseModule, SmtpMailerService } from '@app/common';
 import { AccessRequestsService } from './access-requests/access-requests.service';
 import { AuthService } from './auth/auth.service';
 import { OtpService } from './auth/otp.service';
@@ -29,6 +29,7 @@ import { SupportService } from './support/support.service';
   ],
   controllers: [EmployeeServiceController],
   providers: [
+    SmtpMailerService,
     MailService,
     OtpService,
     AuthService,

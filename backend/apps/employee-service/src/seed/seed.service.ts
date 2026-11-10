@@ -63,8 +63,8 @@ export class SeedService implements OnApplicationBootstrap {
         code: 'DEPT-IT',
         name: 'IT & Digital Innovation',
         managerName: 'Manager One',
-        managerEmail: 'manager.it@dexagroup.com',
-        hrPicEmail: 'admin.hrd@dexagroup.com',
+        managerEmail: 'abdurrahmankhairi17@gmail.com',
+        hrPicEmail: 'abdurrahman.khairi@student.president.ac.id',
         maxWfhDaysPerWeek: 1,
       },
       {
@@ -106,6 +106,10 @@ export class SeedService implements OnApplicationBootstrap {
       let existing = await this.departmentRepo.findOne({ where: { name: d.name } });
       if (!existing) {
         existing = await this.departmentRepo.save(this.departmentRepo.create({ ...d, isActive: true }));
+      } else if (existing.managerEmail !== d.managerEmail || existing.hrPicEmail !== d.hrPicEmail) {
+        existing.managerEmail = d.managerEmail;
+        existing.hrPicEmail = d.hrPicEmail;
+        await this.departmentRepo.save(existing);
       }
       deptMap.set(d.name, existing);
     }
@@ -175,7 +179,7 @@ export class SeedService implements OnApplicationBootstrap {
             targetDate: shiftDateString(today, -8),
             reason: 'Weekly 1-day hybrid WFH quota for sprint backend microservice deployment and database optimization.',
             managerEmail: itDept?.managerEmail ?? 'manager.it@dexagroup.com',
-            ccEmails: 'admin.hrd@dexagroup.com, employee.one@dexagroup.com',
+            ccEmails: 'admin.hrd@dexagroup.com, abdurrahmankhairi171204@gmail.com',
             emailDispatched: true,
             status: ApprovalStatus.APPROVED,
             reviewNotes: 'Approved within 1-day/week department WFH quota by IT Manager & HRD.',
@@ -191,7 +195,7 @@ export class SeedService implements OnApplicationBootstrap {
             estimatedOvertimePay: budiOt.overtimePayAmount,
             reason: 'Production deployment hotfix and post-release database indexing (17:30 - 19:00 WIB).',
             managerEmail: itDept?.managerEmail ?? 'manager.it@dexagroup.com',
-            ccEmails: 'admin.hrd@dexagroup.com, employee.one@dexagroup.com',
+            ccEmails: 'admin.hrd@dexagroup.com, abdurrahmankhairi171204@gmail.com',
             emailDispatched: true,
             status: ApprovalStatus.APPROVED,
             reviewNotes: 'Approved 90m overtime (2.5x multiplier hours = IDR 238,439) for payroll cycle.',
@@ -293,6 +297,19 @@ export class SeedService implements OnApplicationBootstrap {
     if (existingCount > 0) {
       await this.ensureDepartmentsAndPayrollBackfill();
       await this.ensureManagerAccounts();
+
+      // Synchronize Employee One email to abdurrahmankhairi171204@gmail.com
+      const empOne = await this.employeeRepo.findOne({ where: { employeeCode: 'DEXA-2026-002' } });
+      if (empOne && empOne.email !== 'abdurrahmankhairi171204@gmail.com') {
+        empOne.email = 'abdurrahmankhairi171204@gmail.com';
+        await this.employeeRepo.save(empOne);
+        const empOneUser = await this.userRepo.findOne({ where: { id: empOne.userId } });
+        if (empOneUser && empOneUser.email !== 'abdurrahmankhairi171204@gmail.com') {
+          empOneUser.email = 'abdurrahmankhairi171204@gmail.com';
+          await this.userRepo.save(empOneUser);
+        }
+        this.logger.log('Synchronized Employee One email to abdurrahmankhairi171204@gmail.com');
+      }
       const existingSysAdmin = await this.userRepo.findOne({ where: { role: UserRole.SYSTEM_ADMIN } });
       if (!existingSysAdmin) {
         this.logger.log('Provisioning System Administrator account (Abdurrahman Khairi <sysadmin@dexagroup.com>)...');
@@ -360,7 +377,7 @@ export class SeedService implements OnApplicationBootstrap {
         joinDate: '2021-03-15',
       },
       {
-        email: 'employee.one@dexagroup.com',
+        email: 'abdurrahmankhairi171204@gmail.com',
         passwordHash: empPasswordHash,
         role: UserRole.EMPLOYEE,
         isVerified: true,
