@@ -50,6 +50,7 @@ export class JwtAuthGuard implements CanActivate {
         role: decoded.role,
         employeeId: decoded.employeeId,
         fullName: decoded.fullName,
+        department: decoded.department ?? 'General',
       };
       return true;
     } catch {
