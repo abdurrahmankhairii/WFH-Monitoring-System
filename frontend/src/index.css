@@ -1,0 +1,188 @@
+/* ============================================================================
+ * Copyright (c) 2026 Abdurrahman Khairi. All Rights Reserved.
+ * Created strictly for Technical Assessment evaluation.
+ * Unauthorized commercial use, modification, or distribution is prohibited.
+ * ============================================================================ */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* taste-skill v2.5.0 Brand Design System Tokens (Precision Editorial Operations) */
+    --p-bg: #f8f8f6;
+    --p-surface: #ffffff;
+    --p-ink: #0f172a;
+    --p-brand-navy: #0a2d62;
+    --p-muted: #526077;
+    --p-accent: #d32f2f;
+    --p-border: rgba(15, 23, 42, 0.08);
+    --r-sm: 6px;
+    --r-md: 12px;
+    --r-lg: 16px;
+    --m-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+    --m-in: 140ms;
+    --m-out: 200ms;
+    color-scheme: light;
+  }
+
+  html.dark {
+    --p-bg: #0b1120;
+    --p-surface: #111827;
+    --p-ink: #f8fafc;
+    --p-brand-navy: #1e3a8a;
+    --p-muted: #94a3b8;
+    --p-accent: #ef4444;
+    --p-border: rgba(148, 163, 184, 0.16);
+    color-scheme: dark;
+  }
+
+  body {
+    background-color: var(--p-bg);
+    color: var(--p-ink);
+    font-family: 'IBM Plex Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    letter-spacing: -0.006em;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    transition: background-color var(--m-out) var(--m-ease), color var(--m-out) var(--m-ease);
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    letter-spacing: -0.022em;
+  }
+
+  /* Tabular numerals on all monospace, time, date, and numeric inputs */
+  .font-mono,
+  input[type='time'],
+  input[type='date'],
+  input[type='number'] {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@layer components {
+  /* taste-skill Surface & Card Discipline */
+  .taste-card {
+    background-color: var(--p-surface);
+    border: 1px solid rgba(226, 232, 240, 0.9);
+    border-radius: 1rem;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+    transition:
+      transform var(--m-out) var(--m-ease),
+      border-color var(--m-out) var(--m-ease),
+      box-shadow var(--m-out) var(--m-ease);
+  }
+
+  html.dark .taste-card {
+    background-color: #111827;
+    border-color: rgba(51, 65, 85, 0.75);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.04),
+      0 2px 8px rgba(2, 6, 23, 0.35);
+  }
+
+  .taste-card-interactive:hover {
+    transform: translateY(-2px);
+    border-color: rgba(37, 99, 235, 0.35);
+    box-shadow: 0 8px 20px -6px rgba(15, 23, 42, 0.08);
+    transition-duration: var(--m-in);
+  }
+
+  html.dark .taste-card-interactive:hover {
+    border-color: rgba(96, 165, 250, 0.4);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.06),
+      0 10px 24px -6px rgba(2, 6, 23, 0.6);
+  }
+
+  /* taste-skill Button Micro-Interaction (1px step on hover, .985 press scale) */
+  .taste-btn {
+    transition:
+      transform var(--m-out) var(--m-ease),
+      background-color var(--m-out) var(--m-ease),
+      border-color var(--m-out) var(--m-ease),
+      box-shadow var(--m-out) var(--m-ease);
+  }
+
+  .taste-btn:hover:not(:disabled) {
+    transform: translateY(-1px);
+    transition-duration: var(--m-in);
+  }
+
+  .taste-btn:active:not(:disabled) {
+    transform: translateY(0) scale(0.985);
+    transition-duration: 80ms;
+  }
+}
+
+/* Harmonized Dark Mode Surface Support Across Form Inputs */
+html.dark input:not([type='checkbox']):not([type='radio']),
+html.dark select,
+html.dark textarea {
+  background-color: #0f172a;
+  color: #f8fafc;
+  border-color: #334155;
+}
+
+html.dark input::placeholder,
+html.dark textarea::placeholder {
+  color: #64748b;
+}
+
+/* Custom scrollbar styling */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 9999px;
+}
+html.dark ::-webkit-scrollbar-thumb {
+  background: #334155;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+@keyframes toastSlideInRight {
+  from {
+    opacity: 0;
+    transform: translate3d(24px, 0, 0) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+.animate-toast-in {
+  animation: toastSlideInRight 0.22s var(--m-ease) forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  body {
+    background: #ffffff !important;
+    color: #000000 !important;
+  }
+}
