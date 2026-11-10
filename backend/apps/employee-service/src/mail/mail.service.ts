@@ -5,9 +5,7 @@
 // ============================================================================
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import * as nodemailer from 'nodemailer';
-import { Transporter } from 'nodemailer';
-import { OtpType, SupportCategory } from '@app/common';
+import { MailDispatchResult, OtpType, SmtpMailerService, SupportCategory } from '@app/common';
 
 interface SupportMailInput {
   senderEmail: string;
@@ -23,66 +21,25 @@ interface SupportMailInput {
   ccEmails?: string[];
 }
 
-// Feature: Central SMTP Mail Dispatcher — Purpose: Dispatches system emails including OTP verification, password resets, and Contact Developer tickets.
-// OOP: Injectable Domain Service (Business Logic Encapsulation) — Connected To: Used by auth.service.ts, employees.service.ts, access-requests.service.ts.
+// Feature: Central SMTP Mail Composer — Purpose: Builds OTP, Contact Developer and diagnostic emails and hands them to the shared SMTP mailer.
+// OOP: Injectable Domain Service (Composition over SmtpMailerService) — Connected To: auth.service.ts, employees.service.ts, support.service.ts and libs/common smtp-mailer.service.ts.
 @Injectable()
 export class MailService {
   private readonly logger = new Logger(MailService.name);
-  private readonly transporter: Transporter;
-  private readonly systemFrom: string;
-  private readonly authenticatedSender: string;
   private readonly developerEmail: string;
+  private static readonly TEMPLATE_BODY_ANCHOR = '<div style="padding:26px;">';
 
-  constructor(private readonly config: ConfigService) {
-    const host = this.config.get<string>('SMTP_HOST', 'smtp.gmail.com');
-    const port = Number(this.config.get<string>('SMTP_PORT', '587'));
-    const user = this.config.get<string>('SMTP_USER', '');
-    const pass = this.config.get<string>('SMTP_PASS', '');
-    const secure = this.config.get<string>('SMTP_SECURE', 'false') === 'true' || port === 465;
-    const fromSetting = this.config.get<string>('SMTP_FROM', '');
-
-    // With a real SMTP login, every email goes out from the bare signed in address (like the Pertamina mailer).
-    this.authenticatedSender = user && pass ? this.extractAddress(user) || this.extractAddress(fromSetting) : '';
-    this.systemFrom = this.authenticatedSender || fromSetting || '"Dexa Group WFH Monitoring" <noreply-wfh@dexagroup.com>';
+  constructor(
+    private readonly config: ConfigService,
+    private readonly mailer: SmtpMailerService,
+  ) {
     this.developerEmail = this.config.get<string>('DEVELOPER_SUPPORT_EMAIL', 'abdurrahman.khairi@dexagroup.com');
-
-    const transportOptions: any = {
-      host,
-      port,
-      secure,
-      tls: {
-        rejectUnauthorized: false,
-      },
-    };
-
-    if (user && pass) {
-      transportOptions.auth = { user, pass };
-    }
-
-    // Feature: Real SMTP Tuning — Purpose: Configures TLS handshake requirements for Google Gmail and Microsoft Outlook.
-    // OOP: Strategy Adapter — Connected To: Google SMTP (smtp.gmail.com:587) and Microsoft Office 365 (smtp.office365.com:587).
-    if (host.includes('gmail.com')) {
-      transportOptions.requireTLS = true;
-    } else if (host.includes('office365.com') || host.includes('outlook.com')) {
-      transportOptions.requireTLS = true;
-      transportOptions.tls = {
-        ciphers: 'SSLv3',
-        rejectUnauthorized: false,
-      };
-    }
-
-    this.transporter = nodemailer.createTransport(transportOptions);
-    this.logger.log(`Initialized MailService with SMTP: ${host}:${port} (secure: ${secure}, auth: ${Boolean(user && pass)})`);
   }
 
-  // Feature: SMTP Diagnostic Testing — Purpose: Sends an instant diagnostic test email to verify SMTP gateway handshake and real-world inbox delivery.
+  // Feature: SMTP Diagnostic Testing — Purpose: Sends an instant diagnostic test email from the system mailbox to verify the SMTP handshake and inbox delivery.
   // OOP: Domain Service Method (Encapsulated Business Operation) — Connected To: Called by support.service.ts testEmail() via TCP support.test_email.
   async sendTestEmail(targetEmail: string): Promise<{ success: boolean; message: string; messageId?: string }> {
-    const override = this.config.get<string>('SMTP_OVERRIDE_RECIPIENT');
-    const actualRecipient = override || targetEmail;
-    const host = this.config.get<string>('SMTP_HOST', 'smtp.gmail.com');
-    const port = this.config.get<string>('SMTP_PORT', '587');
-    const user = this.config.get<string>('SMTP_USER', '');
+    const { host, port, systemAddress, senderMode } = this.mailer.getDiagnostics();
 
     const testHtml = this.wrapEmailTemplate(
       'SMTP Gateway Diagnostic Test — Dexa WFH System',
@@ -96,8 +53,9 @@ export class MailService {
         <table style="width:100%;border-collapse:collapse;font-size:13px;color:#334155;margin-bottom:16px;">
           <tr><td style="padding:6px 0;width:150px;color:#64748B;">SMTP Host:</td><td style="font-weight:600;">${host}</td></tr>
           <tr><td style="padding:6px 0;color:#64748B;">SMTP Port:</td><td style="font-weight:600;">${port}</td></tr>
-          <tr><td style="padding:6px 0;color:#64748B;">Authenticated Sender:</td><td style="font-weight:600;">${user || 'Anonymous (no SMTP_USER set)'}</td></tr>
-          <tr><td style="padding:6px 0;color:#64748B;">Target Recipient:</td><td style="font-weight:600;">${actualRecipient}${override ? ` (Forwarded from ${targetEmail})` : ''}</td></tr>
+          <tr><td style="padding:6px 0;color:#64748B;">System Sender:</td><td style="font-weight:600;">${systemAddress}</td></tr>
+          <tr><td style="padding:6px 0;color:#64748B;">Sender Mode:</td><td style="font-weight:600;">${senderMode === 'relay' ? 'relay (user emails are sent as the user through the company relay)' : 'system (user emails are sent from the system sender with Reply-To set to the user)'}</td></tr>
+          <tr><td style="padding:6px 0;color:#64748B;">Target Recipient:</td><td style="font-weight:600;">${targetEmail}</td></tr>
           <tr><td style="padding:6px 0;color:#64748B;">Server Timestamp:</td><td style="font-weight:600;">${new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })} WIB</td></tr>
         </table>
         <p style="margin:0;color:#64748B;font-size:12px;line-height:1.5;">
@@ -106,27 +64,23 @@ export class MailService {
       `,
     );
 
-    try {
-      const info = await this.transporter.sendMail({
-        from: this.systemFrom,
-        to: actualRecipient,
-        subject: `[Dexa WFH] SMTP Gateway Diagnostic Handshake Verified (${new Date().toLocaleTimeString('id-ID')})`,
-        html: testHtml,
-      });
-      this.logger.log(`[SMTP_DIAGNOSTIC_SUCCESS] Sent test email to ${actualRecipient} (messageId: ${info.messageId})`);
-      return {
-        success: true,
-        message: `Diagnostic email successfully delivered to ${actualRecipient}`,
-        messageId: info.messageId,
-      };
-    } catch (err: any) {
-      const errMsg = err?.message || String(err);
-      this.logger.error(`[SMTP_DIAGNOSTIC_ERROR] Handshake failed to ${actualRecipient}: ${errMsg}`);
-      return {
-        success: false,
-        message: `SMTP connection failed: ${errMsg}`,
-      };
+    const result = await this.mailer.send({
+      to: [targetEmail],
+      subject: `[Dexa WFH] SMTP Gateway Diagnostic Handshake Verified (${new Date().toLocaleTimeString('id-ID')})`,
+      html: testHtml,
+      text: `SMTP diagnostic from ${systemAddress} through ${host}:${port} to ${targetEmail}.`,
+      bannerAnchor: MailService.TEMPLATE_BODY_ANCHOR,
+    });
+    if (!result.delivered) {
+      this.logger.error(`[SMTP_DIAGNOSTIC_ERROR] Handshake failed to ${targetEmail}: ${result.error}`);
+      return { success: false, message: `SMTP connection failed: ${result.error}` };
     }
+    this.logger.log(`[SMTP_DIAGNOSTIC_SUCCESS] Sent test email to ${result.to.join(', ')} (messageId: ${result.messageId})`);
+    return {
+      success: true,
+      message: `Diagnostic email successfully delivered to ${result.to.join(', ')}`,
+      messageId: result.messageId,
+    };
   }
 
   // Feature: Core System Architecture — Purpose: Sends a 6-digit OTP email for either New Account Verification or Forgot Password.
@@ -178,23 +132,24 @@ export class MailService {
       '© 2026 Abdurrahman Khairi - Created strictly for Technical Assessment evaluation. Unauthorized commercial use is prohibited',
     ].join('\n');
 
-    const delivered = await this.safeSend({
-      from: this.systemFrom,
-      to: params.toEmail,
+    // OTP mail always leaves from the system mailbox (SMTP_USER), the same model as the Pertamina mailer.
+    const result = await this.mailer.send({
+      to: [params.toEmail],
       subject,
       text,
       html,
+      bannerAnchor: MailService.TEMPLATE_BODY_ANCHOR,
     });
+    const delivered = result.delivered;
     if (!delivered) {
       this.logger.warn(`[OTP_FALLBACK] Email not delivered. ${params.type} OTP for ${params.toEmail} is ${params.otpCode} (valid 15 minutes).`);
     }
     return delivered;
   }
 
-  // Feature: Core System Architecture — Purpose: Sends a "Contact Developer / Need Help" email where: - TO: System Administrator accounts - CC: HR Admin accounts & sender.
-  // OOP: Domain Service Method (Encapsulated Business Operation) — Connected To: Called by backend/apps/employee-service/src/support/support.service.ts contactDeveloper().
-  async sendContactDeveloperEmail(input: SupportMailInput): Promise<boolean> {
-    const formattedSender = `"${input.senderName} (Dexa WFH User)" <${input.senderEmail}>`;
+  // Feature: Contact Developer via SMTP — Purpose: Sends the support ticket as the signed in user (relay mode) or from the system sender, To System Administrators and Cc HR Admins plus the sender.
+  // OOP: Domain Service Method (Encapsulated Business Operation) — Connected To: support.service.ts contactDeveloper() and SmtpMailerService.send().
+  async sendContactDeveloperEmail(input: SupportMailInput): Promise<MailDispatchResult> {
     const toRecipients = input.toEmails && input.toEmails.length > 0 ? input.toEmails : [this.developerEmail];
     const ccRecipients = input.ccEmails && input.ccEmails.length > 0 ? input.ccEmails : [input.senderEmail];
 
@@ -214,14 +169,23 @@ export class MailService {
       `,
     );
 
-    return this.safeSend({
-      from: formattedSender,
-      sender: input.senderEmail,
-      replyTo: input.senderEmail,
+    const text = [
+      `Support ticket #${input.ticketId.slice(0, 8).toUpperCase()} from ${input.senderName} <${input.senderEmail}>`,
+      `Role: ${input.senderRole}${input.employeeCode ? ` (${input.employeeCode})` : ''}`,
+      `Category: ${input.category}`,
+      `Module: ${input.moduleLocation}`,
+      '',
+      input.message,
+    ].join('\n');
+
+    return this.mailer.send({
+      sender: { email: input.senderEmail, name: input.senderName },
       to: toRecipients,
       cc: ccRecipients,
       subject: `[WFH Support - ${input.category}] ${input.subject}`,
       html,
+      text,
+      bannerAnchor: MailService.TEMPLATE_BODY_ANCHOR,
     });
   }
 
@@ -250,60 +214,4 @@ export class MailService {
     `;
   }
 
-  // Feature: #10 resilience — Purpose: Sends mail via Nodemailer without crashing the microservice if a local developer environment has no SMTP server running.
-  // OOP: Domain Service Method (Encapsulated Business Operation) — Connected To: All MailService public methods.
-  private async safeSend(options: nodemailer.SendMailOptions): Promise<boolean> {
-    try {
-      const overrideRecipient = this.config.get<string>('SMTP_OVERRIDE_RECIPIENT', '');
-
-      let actualTo = options.to;
-      let actualHtml = options.html;
-
-      // Feature: Smart Recipient Routing for Demo Accounts — Delivers demo accounts to evaluation inbox.
-      if (overrideRecipient) {
-        const originalTo = Array.isArray(options.to) ? options.to.join(', ') : String(options.to);
-        actualTo = overrideRecipient;
-        if (typeof actualHtml === 'string') {
-          actualHtml = actualHtml.replace(
-            '<div style="padding:26px;">',
-            `<div style="padding:26px;">
-              <div style="background:#FEF3C7;border:1px solid #F59E0B;padding:10px 14px;border-radius:8px;margin-bottom:16px;font-size:12px;color:#92400E;font-family:sans-serif;line-height:1.4;">
-                <strong>ℹ️ WFH System Demonstration Routing:</strong><br/>
-                Intended demo recipient: <code>${originalTo}</code><br/>
-                Delivered directly to your evaluation inbox: <code>${overrideRecipient}</code>
-              </div>`,
-          );
-        }
-      }
-
-      const mailOptions: nodemailer.SendMailOptions = {
-        ...options,
-        to: actualTo,
-        html: actualHtml,
-        from: this.authenticatedSender || this.config.get<string>('SMTP_FROM') || options.from,
-        replyTo: options.replyTo || options.from,
-      };
-      // A Sender header naming another domain does not match the signed in mailbox, so it is dropped under real SMTP.
-      if (this.authenticatedSender) {
-        delete mailOptions.sender;
-      }
-
-      const info = await this.transporter.sendMail(mailOptions);
-      this.logger.log(`[SMTP_SUCCESS] Dispatched email -> to=${String(mailOptions.to)} | from=${String(mailOptions.from)} | subject=${String(mailOptions.subject)} | id=${info.messageId}`);
-      return true;
-    } catch (error) {
-      const errMsg = error instanceof Error ? error.message : String(error);
-      this.logger.error(`[SMTP_ERROR] Failed to send email to ${String(options.to)}: ${errMsg}`, error instanceof Error ? error.stack : undefined);
-      return false;
-    }
-  }
-
-  // Feature: Sender Address Sanitization — Purpose: Returns the bare RFC 5322 address from a value such as "Name" <user@gmail.com>, or an empty string when there is none.
-  // OOP: Private Pure Helper Method — Connected To: MailService constructor (SMTP_USER, SMTP_FROM) and safeSend().
-  private extractAddress(raw: string): string {
-    if (!raw) return '';
-    const match = raw.match(/<([^>]+)>/);
-    const address = (match ? match[1] : raw).replace(/["']/g, '').trim();
-    return address.includes('@') ? address : '';
-  }
 }

@@ -12,6 +12,7 @@ export * from './dto';
 export * from './entities';
 export * from './interfaces/auth.interface';
 export * from './interfaces/payloads.interface';
+export * from './mail/smtp-mailer.service';
 export * from './response/standard-response';
 export * from './response/rpc-exception.filter';
 export * from './utils/duration.util';

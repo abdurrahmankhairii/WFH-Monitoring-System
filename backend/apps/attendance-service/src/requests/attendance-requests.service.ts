@@ -4,11 +4,10 @@
 // Unauthorized commercial use, modification, or distribution is prohibited.
 // ============================================================================
 import { Injectable, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import * as nodemailer from 'nodemailer';
 import { In, Repository } from 'typeorm';
 import {
+  ActorContext,
   ActorPayload,
   ApprovalStatus,
   Attendance,
@@ -19,14 +18,18 @@ import {
   CreateAttendanceRequestPayload,
   Department,
   Employee,
+  MailDispatchResult,
   PhotoCaptureSource,
   ReviewAttendanceRequestPayload,
+  SmtpMailerService,
   StandardApiResponse,
+  User,
   UserRole,
   WfhWorkflowMode,
   buildPaginationMeta,
   buildResponse,
   calculateOvertimeAndPay,
+  describeMailDispatch,
   evaluateClockIn,
   evaluateClockOut,
   getIsoWeekRange,
@@ -39,13 +42,11 @@ import {
 import { AttendanceService } from '../attendance/attendance.service';
 
 // Feature: Hybrid WFH Approval, Overtime & Leave Requests — Purpose: Implements WFH Approval (1 Day/Week quota), Overtime Pay requests, Leave/Sick/Correction, and SMTP routing to Manager & HRD.
-// OOP: Injectable Domain Service (Business Logic Encapsulation) — Connected To: AttendanceServiceController (@MessagePattern ATTENDANCE_REQUEST_PATTERNS) -> api-gateway.
+// OOP: Injectable Domain Service (Business Logic Encapsulation) — Connected To: AttendanceServiceController (@MessagePattern ATTENDANCE_REQUEST_PATTERNS) -> api-gateway, libs/common smtp-mailer.service.ts.
 @Injectable()
 export class AttendanceRequestsService {
   private readonly logger = new Logger(AttendanceRequestsService.name);
-  private readonly transporter: nodemailer.Transporter;
-  private readonly smtpUser: string;
-  private readonly smtpFrom: string;
+  private static readonly EMAIL_BODY_ANCHOR = '<div style="padding:24px;color:#1e293b;">';
 
   constructor(
     @InjectRepository(AttendanceRequest)
@@ -56,46 +57,11 @@ export class AttendanceRequestsService {
     private readonly departmentRepo: Repository<Department>,
     @InjectRepository(Employee)
     private readonly employeeRepo: Repository<Employee>,
+    @InjectRepository(User)
+    private readonly userRepo: Repository<User>,
     private readonly attendanceService: AttendanceService,
-    private readonly config: ConfigService,
-  ) {
-    const host = this.config.get<string>('SMTP_HOST', 'smtp.gmail.com');
-    const port = Number(this.config.get<string>('SMTP_PORT', '587'));
-    const secure = this.config.get<string>('SMTP_SECURE', 'false') === 'true' || port === 465;
-    const user = this.config.get<string>('SMTP_USER', '');
-    const pass = this.config.get<string>('SMTP_PASS', '');
-
-    this.smtpUser = user;
-    this.smtpFrom = this.config.get<string>('SMTP_FROM', '');
-
-    const transportOptions: any = {
-      host,
-      port,
-      secure,
-      tls: {
-        rejectUnauthorized: false,
-      },
-    };
-
-    if (user && pass) {
-      transportOptions.auth = { user, pass };
-    }
-
-    // Feature: Real SMTP Tuning — Purpose: Configures TLS handshake requirements for Google Gmail and Microsoft Outlook.
-    // OOP: Strategy Adapter — Connected To: Google SMTP (smtp.gmail.com:587) and Microsoft Office 365 (smtp.office365.com:587).
-    if (host.includes('gmail.com')) {
-      transportOptions.requireTLS = true;
-    } else if (host.includes('office365.com') || host.includes('outlook.com')) {
-      transportOptions.requireTLS = true;
-      transportOptions.tls = {
-        ciphers: 'SSLv3',
-        rejectUnauthorized: false,
-      };
-    }
-
-    this.transporter = nodemailer.createTransport(transportOptions);
-    this.logger.log(`Initialized AttendanceRequestsService with SMTP: ${host}:${port} (secure: ${secure}, auth: ${Boolean(user && pass)})`);
-  }
+    private readonly mailer: SmtpMailerService,
+  ) {}
 
   // Feature: Hybrid WFH, Overtime & Leave Submission — Purpose: Validates weekly WFH quota (1 day/week), calculates overtime pay (1/173 * 1.5x/2.0x), saves request, and emails Manager + HRD.
   // OOP: Domain Service Method (Encapsulated Business Operation) — Connected To: POST /api/attendance-requests -> frontend/src/components/custom/LeaveAndCorrectionModal.tsx.
@@ -117,9 +83,11 @@ export class AttendanceRequestsService {
       ? hrPicEmail
       : (dept?.managerEmail ?? 'manager.it@dexagroup.com');
     const maxWfhDaysPerWeek = policy.maxWfhDaysPerWeek ?? dept?.maxWfhDaysPerWeek ?? 1;
-    const ccList = isManagerOrAdmin
-      ? Array.from(new Set(['sysadmin@dexagroup.com', hrPicEmail.toLowerCase(), employee.email.toLowerCase()]))
-      : Array.from(new Set([hrPicEmail.toLowerCase(), employee.email.toLowerCase()]));
+    // A manager or system admin request also copies the active System Administrator accounts from the users table.
+    const adminCc = isManagerOrAdmin ? await this.findActiveSystemAdminEmails() : [];
+    const ccList = Array.from(
+      new Set([...adminCc, hrPicEmail, employee.email].map((address) => address.trim().toLowerCase()).filter(Boolean)),
+    );
 
     if (dto.requestType === AttendanceRequestType.CORRECTION && !dto.requestedClockIn && !dto.requestedClockOut) {
       throwRpcError(
@@ -222,7 +190,7 @@ export class AttendanceRequestsService {
     const saved = await this.requestRepo.save(record);
     saved.employee = employee;
 
-    emailDispatched = await this.sendApprovalRequestEmail({
+    const dispatch = await this.sendApprovalRequestEmail({
       employee,
       managerName,
       managerEmail,
@@ -236,6 +204,7 @@ export class AttendanceRequestsService {
       isNoticeOnly: isNoticeOnlyWfh,
       requestId: saved.id,
     });
+    emailDispatched = dispatch.delivered;
     if (emailDispatched !== record.emailDispatched) {
       saved.emailDispatched = emailDispatched;
       await this.requestRepo.update(saved.id, { emailDispatched });
@@ -250,14 +219,15 @@ export class AttendanceRequestsService {
     };
     const typeLabel = labelMap[dto.requestType] ?? dto.requestType;
 
+    const deliveryReport = describeMailDispatch(dispatch);
     if (!emailDispatched) {
       return buildResponse({
         type: 'info',
         where,
         what: `${typeLabel} saved, email not delivered`,
         why: isNoticeOnlyWfh
-          ? `Notice for ${dto.targetDate} is saved and Clock-In is unlocked, but the SMTP server did not accept the email to ${managerEmail}. Check SMTP_USER and SMTP_PASS on the attendance service.`
-          : `Request for ${dto.targetDate} is saved as PENDING in the review queue, but the SMTP server did not accept the email to ${managerEmail}. Check SMTP_USER and SMTP_PASS on the attendance service.`,
+          ? `Notice for ${dto.targetDate} is saved and Clock-In is unlocked, but the email to Manager (${managerEmail}) did not go out. ${deliveryReport}`
+          : `Request for ${dto.targetDate} is saved as PENDING in the review queue, but the email to Manager (${managerEmail}) did not go out. ${deliveryReport}`,
         data: saved,
       });
     }
@@ -268,8 +238,8 @@ export class AttendanceRequestsService {
         ? `WFH Notice delivered to ${managerEmail} (Clock-In Unlocked)`
         : `${typeLabel} submitted & emailed to ${managerEmail}`,
       why: isNoticeOnlyWfh
-        ? `Notice for ${dto.targetDate} dispatched via SMTP to Manager (${managerEmail}) & HRD (${hrPicEmail}). Clock-In is now unlocked under Notice-Only policy.`
-        : `Request for ${dto.targetDate} queued (PENDING) and routed via SMTP to Manager (${managerEmail}) & HRD (${hrPicEmail}).`,
+        ? `Notice for ${dto.targetDate} is recorded and Clock-In is unlocked under Notice-Only policy. ${deliveryReport}`
+        : `Request for ${dto.targetDate} queued (PENDING) for Manager & HRD review. ${deliveryReport}`,
       data: saved,
     });
   }
@@ -375,9 +345,12 @@ export class AttendanceRequestsService {
       syncedAttendance = await this.syncApprovedRequestToAttendance(req);
     }
 
-    if (req.employee) {
-      await this.sendDecisionNotificationEmail(req, payload.actor.email);
-    }
+    const decisionMail = req.employee ? await this.sendDecisionNotificationEmail(req, payload.actor) : null;
+    const decisionMailReport = decisionMail
+      ? decisionMail.delivered
+        ? ` Decision email: ${describeMailDispatch(decisionMail)}`
+        : ` Decision email not delivered: ${describeMailDispatch(decisionMail)}`
+      : '';
 
     const empName = req.employee?.fullName ?? 'Employee';
     return buildResponse({
@@ -385,8 +358,8 @@ export class AttendanceRequestsService {
       what: `${payload.dto.decision === ApprovalStatus.APPROVED ? 'Approved' : 'Rejected'} ${req.requestType} for ${empName}`,
       why:
         payload.dto.decision === ApprovalStatus.APPROVED
-          ? `Request approved, attendance record for ${req.targetDate} synced, and confirmation email sent.`
-          : `Request marked as REJECTED${payload.dto.reviewNotes ? `: "${payload.dto.reviewNotes}"` : '.'}`,
+          ? `Request approved and attendance record for ${req.targetDate} synced.${decisionMailReport}`
+          : `Request marked as REJECTED${payload.dto.reviewNotes ? `: "${payload.dto.reviewNotes}".` : '.'}${decisionMailReport}`,
       data: {
         request: savedReq,
         syncedAttendance,
@@ -476,16 +449,16 @@ export class AttendanceRequestsService {
     return this.attendanceRepo.save(attendance);
   }
 
-  // Feature: Sender Email Sanitization — Purpose: Extracts pure email address from quoted or bracketed strings for RFC 5322 compliance.
-  // OOP: Private Pure Helper Method — Connected To: sendApprovalRequestEmail() and sendDecisionNotificationEmail().
-  private extractCleanEmail(raw: string): string {
-    if (!raw) return '';
-    const match = raw.match(/<([^>]+)>/);
-    return match ? match[1].trim() : raw.replace(/["']/g, '').trim();
+  // Feature: Request Email Routing — Purpose: Returns the email of every active System Administrator account so manager requests copy the real admins.
+  // OOP: Private Repository Query — Connected To: create() above and the users table (role SYSTEM_ADMIN, is_active).
+  private async findActiveSystemAdminEmails(): Promise<string[]> {
+    const admins = await this.userRepo.find({ where: { role: UserRole.SYSTEM_ADMIN, isActive: true } });
+    const emails = admins.map((admin) => admin.email).filter(Boolean);
+    return emails.length > 0 ? emails : ['sysadmin@dexagroup.com'];
   }
 
-  // Feature: Department Manager & HRD SMTP Dispatch — Purpose: Sends a formatted approval request email from the employee to their Department Manager (`to`) and HRD (`cc`).
-  // OOP: Encapsulated Helper Method — Connected To: Called by create() above -> Delivered through the SMTP provider in SMTP_HOST (Gmail or Outlook).
+  // Feature: Department Manager & HRD SMTP Dispatch — Purpose: Sends the approval request as the employee (relay mode) or from the system sender, To the Department Manager and Cc HRD plus the employee.
+  // OOP: Encapsulated Helper Method — Connected To: create() above -> libs/common SmtpMailerService.send() (SMTP_SENDER_MODE).
   private async sendApprovalRequestEmail(params: {
     employee: Employee;
     managerName: string;
@@ -499,7 +472,7 @@ export class AttendanceRequestsService {
     maxWfhDaysPerWeek: number;
     isNoticeOnly?: boolean;
     requestId?: string;
-  }): Promise<boolean> {
+  }): Promise<MailDispatchResult> {
     const {
       employee,
       managerName,
@@ -573,65 +546,30 @@ export class AttendanceRequestsService {
       </div>
     `;
 
-    // With a real SMTP login the From header is the bare signed in address; the employee stays reachable through Reply-To.
-    const cleanSenderEmail = this.smtpUser || this.extractCleanEmail(this.smtpFrom) || employee.email;
-    const fromAddress = this.smtpUser
-      ? cleanSenderEmail
-      : `"${employee.fullName} (${employee.employeeCode})" <${employee.email}>`;
-
-    const overrideRecipient = this.config.get<string>('SMTP_OVERRIDE_RECIPIENT');
-    let actualTo: string = managerEmail;
-    let actualCc: string[] | undefined = ccList;
-    let actualHtml = html;
-
-    // Feature: Smart Recipient Routing for Demo Accounts — Delivers WFH approval requests directly to evaluation inbox.
-    // OOP: Strategy Pattern (Conditional Decorator) — Connected To: SMTP_OVERRIDE_RECIPIENT env config.
-    if (overrideRecipient) {
-      actualTo = overrideRecipient;
-      actualCc = undefined;
-      actualHtml = actualHtml.replace(
-        '<div style="padding:24px;color:#1e293b;">',
-        `<div style="padding:24px;color:#1e293b;">
-          <div style="background:#FEF3C7;border:1px solid #F59E0B;padding:10px 14px;border-radius:8px;margin-bottom:16px;font-size:12px;color:#92400E;font-family:sans-serif;line-height:1.4;">
-            <strong>⚠️ WFH System Demonstration Routing:</strong><br/>
-            Intended demo recipient: <code>${managerEmail}</code> (CC: <code>${ccList.join(', ')}</code>)<br/>
-            Delivered directly to your evaluation inbox: <code>${overrideRecipient}</code>
-          </div>`,
-      );
-    }
-
-    try {
-      await this.transporter.sendMail({
-        from: fromAddress,
-        sender: this.smtpUser ? undefined : employee.email,
-        replyTo: `"${employee.fullName}" <${employee.email}>`,
-        to: actualTo,
-        cc: actualCc,
-        subject,
-        text: `${subject}\nEmployee: ${employee.fullName} (${employee.employeeCode})\nDepartment: ${employee.department}\nTarget Date: ${targetDate}\nReason: ${reason}`,
-        html: actualHtml,
-      });
-      this.logger.log(`[SMTP_SUCCESS] Dispatched approval email -> to=${actualTo} | originalTo=${managerEmail} | subject=${subject}`);
-      return true;
-    } catch (error) {
-      this.logger.error(`[SMTP_ERROR] Failed to send email to ${managerEmail}: ${(error as Error).message}`, (error as Error).stack);
-      return false;
-    }
+    // The employee is the sender: SMTP_SENDER_MODE=relay sends as the employee, otherwise the system sender sends on their behalf.
+    const result = await this.mailer.send({
+      sender: { email: employee.email, name: employee.fullName },
+      to: [managerEmail],
+      cc: ccList,
+      subject,
+      text: `${subject}\nEmployee: ${employee.fullName} (${employee.employeeCode})\nDepartment: ${employee.department}\nTarget Date: ${targetDate}\nReason: ${reason}${!isNoticeOnly && requestId ? `\nReview: http://localhost:5173/manager/approvals?requestId=${requestId}` : ''}`,
+      html,
+      bannerAnchor: AttendanceRequestsService.EMAIL_BODY_ANCHOR,
+    });
+    this.logger.log(`[REQUEST_EMAIL] ${requestType} ${requestId ?? ''} -> delivered=${result.delivered} mode=${result.mode} intendedTo=${managerEmail} intendedCc=${ccList.join(', ')}`);
+    return result;
   }
 
-  // Feature: Approval Decision Email Notification — Purpose: Sends an email notification to the employee and Department Manager when HRD Admin approves or rejects a request.
-  // OOP: Encapsulated Helper Method — Connected To: Called by review() above.
-  private async sendDecisionNotificationEmail(req: AttendanceRequest, reviewerEmail: string): Promise<void> {
-    if (!req.employee) return;
+  // Feature: Approval Decision Email Notification — Purpose: Sends the decision as the reviewer (relay mode) or from the system sender, To the employee and Cc the Department Manager and the department HR PIC.
+  // OOP: Encapsulated Helper Method — Connected To: review() above -> libs/common SmtpMailerService.send() and the departments table (hr_pic_email).
+  private async sendDecisionNotificationEmail(req: AttendanceRequest, reviewer: ActorContext): Promise<MailDispatchResult | null> {
+    if (!req.employee) return null;
+    const reviewerEmail = reviewer.email;
     const toEmail = req.employee.email;
-    const ccEmails = [req.managerEmail, 'admin.hrd@dexagroup.com'].filter(Boolean) as string[];
+    const dept = await this.departmentRepo.findOne({ where: { name: req.employee.department } });
+    const ccEmails = [req.managerEmail, dept?.hrPicEmail ?? 'admin.hrd@dexagroup.com'].filter(Boolean) as string[];
     const subject = `Dexa Group ${req.requestType.replace('_', ' ')} ${req.status} — ${req.targetDate}`;
     const isApproved = req.status === ApprovalStatus.APPROVED;
-
-    const cleanReviewerFrom = this.smtpUser || this.extractCleanEmail(this.smtpFrom) || reviewerEmail || 'admin.hrd@dexagroup.com';
-    const fromAddress = this.smtpUser
-      ? cleanReviewerFrom
-      : `"Dexa Group HRD Approval" <${reviewerEmail || 'admin.hrd@dexagroup.com'}>`;
 
     const html = `
       <div style="font-family:'Inter',Arial,sans-serif;max-width:640px;margin:0 auto;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden;background:#ffffff;">
@@ -662,40 +600,17 @@ export class AttendanceRequestsService {
       </div>
     `;
 
-    const overrideRecipient = this.config.get<string>('SMTP_OVERRIDE_RECIPIENT');
-    let actualTo: string = toEmail;
-    let actualCc: string[] | undefined = ccEmails;
-    let actualHtml = html;
-
-    // Feature: Smart Recipient Routing for Demo Accounts — Delivers HR decision emails directly to evaluation inbox.
-    // OOP: Strategy Pattern (Conditional Decorator) — Connected To: SMTP_OVERRIDE_RECIPIENT env config.
-    if (overrideRecipient) {
-      actualTo = overrideRecipient;
-      actualCc = undefined;
-      actualHtml = actualHtml.replace(
-        '<div style="padding:24px;color:#1e293b;">',
-        `<div style="padding:24px;color:#1e293b;">
-          <div style="background:#FEF3C7;border:1px solid #F59E0B;padding:10px 14px;border-radius:8px;margin-bottom:16px;font-size:12px;color:#92400E;font-family:sans-serif;line-height:1.4;">
-            <strong>⚠️ WFH System Demonstration Routing:</strong><br/>
-            Intended demo recipient: <code>${toEmail}</code> (CC: <code>${ccEmails.join(', ')}</code>)<br/>
-            Delivered directly to your evaluation inbox: <code>${overrideRecipient}</code>
-          </div>`,
-      );
-    }
-
-    try {
-      await this.transporter.sendMail({
-        from: fromAddress,
-        replyTo: reviewerEmail || 'admin.hrd@dexagroup.com',
-        to: actualTo,
-        cc: actualCc,
-        subject,
-        text: `Your ${req.requestType} request for ${req.targetDate} has been marked as ${req.status}. Notes: ${req.reviewNotes ?? 'None'}.`,
-        html: actualHtml,
-      });
-      this.logger.log(`[SMTP_SUCCESS] Dispatched decision email -> to=${actualTo} | originalTo=${toEmail} | status=${req.status}`);
-    } catch (error) {
-      this.logger.error(`[SMTP_ERROR] Failed to send decision email to ${toEmail}: ${(error as Error).message}`, (error as Error).stack);
-    }
+    // The reviewer is the sender: SMTP_SENDER_MODE=relay sends as the reviewer, otherwise the system sender sends on their behalf.
+    const result = await this.mailer.send({
+      sender: { email: reviewerEmail || 'admin.hrd@dexagroup.com', name: reviewer.fullName || 'Dexa Group HRD Approval' },
+      to: [toEmail],
+      cc: ccEmails,
+      subject,
+      text: `Your ${req.requestType} request for ${req.targetDate} has been marked as ${req.status}. Notes: ${req.reviewNotes ?? 'None'}. Reviewed by ${reviewerEmail || 'HRD Administration'}.`,
+      html,
+      bannerAnchor: AttendanceRequestsService.EMAIL_BODY_ANCHOR,
+    });
+    this.logger.log(`[DECISION_EMAIL] ${req.id} ${req.status} -> delivered=${result.delivered} mode=${result.mode} intendedTo=${toEmail} intendedCc=${ccEmails.join(', ')}`);
+    return result;
   }
 }
