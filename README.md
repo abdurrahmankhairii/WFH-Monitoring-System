@@ -21,9 +21,9 @@ Employees clock in and out from home with a live webcam photo that has to match 
 
 To build at high velocity without sacrificing depth, I worked in close partnership with two AI engineering agents (**Antigravity** and **Claude Code**). The agents served as fast technical collaborators for drafting code against my specifications, reviewing diffs, chasing down bugs, and cross checking documentation against the actual source files. They did not replace engineering judgment. Every architectural trade off, including keeping the authoritative clock strictly on the server, enforcing biometric similarity thresholds, and escalating a manager's own WFH notices upward to HR, was decided by me after evaluating the options.
 
-## Grounded Domain Research (Quora, Reddit & HR Practitioners)
+## Grounded Domain Research (Quora, Reddit, Senior R&D & Staff Interviews)
 
-Before writing code, I studied real world remote work discussions on **Quora** and **Reddit** to see how WFH attendance systems fail in practice, and validated those findings with **two professional corporate staff relations practitioners** regarding daily HR operations and Indonesian labor rules:
+Before writing code, I studied real world remote work discussions on **Quora** and **Reddit** to see how WFH attendance systems fail in practice, and validated those findings through direct interviews with a **Senior R&D Engineer** and a **regular corporate staff member** regarding their real-world WFH experiences, task accountability, and daily remote work expectations:
 
 * **Buddy Punching & Photo Reuse:** Solved by combining live webcam capture with 512 dimensional InsightFace ArcFace matching (a cosine similarity of at least 0.45 against the enrolled face), a duplicate face check at enrollment, HTML5 Canvas burned watermarks, perceptual hashes that reject a photo reused from an earlier session, and a same day capture time check on uploaded photos.
 * **Client Clock Manipulation:** Solved by ignoring the browser clock and recording all official timestamps strictly on the server (`new Date()`).

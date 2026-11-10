@@ -47,7 +47,7 @@ The system architecture, iterative brainstorming, debugging, and technical imple
 Product logic and edge cases were shaped by qualitative research conducted before and during development:
 
 1. **Community research.** Real-world remote-work pain points, employee-monitoring friction, and HR attendance loopholes discussed on **Quora** and **Reddit** (e.g., photo reuse, "buddy punching", device clock manipulation, managers drowning in approval emails).
-2. **Practitioner interviews.** Direct domain-insight discussions with **two professional corporate staff relations practitioners** on how corporate HR workflows actually operate: morning WFH reporting, manager-to-HR upward escalation, attendance-correction disputes, and Indonesian overtime rules (the 1/173 hourly-rate convention).
+2. **Senior R&D & Corporate Staff Interviews.** Direct domain-insight discussions with a **Senior R&D Engineer** and a **regular corporate operations staff member** on how WFH workflows actually operate day-to-day from an employee perspective: morning WFH reporting, manager-to-HR upward escalation, attendance-correction disputes, daily task planning vs accomplishment tracking, and Indonesian overtime rules (the 1/173 hourly-rate convention).
 
 ---
 
