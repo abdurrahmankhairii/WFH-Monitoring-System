@@ -88,12 +88,12 @@ export class AuthService {
       });
 
       return buildResponse({
-        type: 'info',
+        type: delivered ? 'info' : 'error',
         where,
-        what: 'Verification OTP sent to email',
+        what: delivered ? 'Verification OTP sent to email' : 'Verification OTP email not delivered',
         why: delivered
           ? `First-time login for ${user.email}. Enter the 6-digit OTP sent to your email to activate your account.`
-          : `First-time login for ${user.email}. Enter 6-digit OTP ${otpCode} to activate your account (local SMTP preview).`,
+          : `First-time login for ${user.email}. A 6-digit OTP was created, but the SMTP server did not accept the email. Check SMTP_USER and SMTP_PASS, then request a new code. An administrator can read the code in the employee-service log.`,
         data: {
           requiresVerification: true,
           email: user.email,
@@ -258,12 +258,12 @@ export class AuthService {
     });
 
     return buildResponse({
-      type: 'info',
+      type: delivered ? 'info' : 'error',
       where,
-      what: 'Verification OTP sent',
+      what: delivered ? 'Verification OTP sent' : 'Verification OTP email not delivered',
       why: delivered
         ? `A new 6-digit verification OTP has been dispatched via SMTP to ${user.email}.`
-        : `A new 6-digit verification OTP (${otpCode}) was generated for ${user.email} (local SMTP preview mode).`,
+        : `A new 6-digit verification OTP was created for ${user.email}, but the SMTP server did not accept the email. Check SMTP_USER and SMTP_PASS, then request a new code. An administrator can read the code in the employee-service log.`,
       data: { email: user.email, expiresInMinutes: 15, demoOtpHint: process.env.NODE_ENV === 'production' ? undefined : otpCode },
     });
   }
@@ -297,12 +297,12 @@ export class AuthService {
     });
 
     return buildResponse({
-      type: 'info',
+      type: delivered ? 'info' : 'error',
       where,
-      what: 'Password reset OTP dispatched',
+      what: delivered ? 'Password reset OTP dispatched' : 'Password reset OTP email not delivered',
       why: delivered
         ? `A 6-digit password reset OTP has been sent to ${user.email} (valid for 15 minutes).`
-        : `A 6-digit password reset OTP (${otpCode}) was generated for ${user.email} (local SMTP preview mode).`,
+        : `A 6-digit password reset OTP was created for ${user.email}, but the SMTP server did not accept the email. Check SMTP_USER and SMTP_PASS, then request a new code. An administrator can read the code in the employee-service log.`,
       data: { email: user.email, expiresInMinutes: 15, demoOtpHint: process.env.NODE_ENV === 'production' ? undefined : otpCode },
     });
   }

@@ -456,9 +456,11 @@ export class EmployeesService {
     });
 
     return buildResponse({
-      type: 'info',
+      type: delivered ? 'info' : 'error',
       where,
-      what: `Sent verification OTP to ${employee.fullName}`,
+      what: delivered
+        ? `Sent verification OTP to ${employee.fullName}`
+        : `Verification OTP for ${employee.fullName} created, email not delivered`,
       why: delivered
         ? `6-digit Account Verification OTP sent via SMTP to ${employee.user.email}.`
         : `6-digit Account Verification OTP (${otpCode}) generated for ${employee.user.email} (local SMTP preview).`,

@@ -250,6 +250,18 @@ export class AttendanceRequestsService {
     };
     const typeLabel = labelMap[dto.requestType] ?? dto.requestType;
 
+    if (!emailDispatched) {
+      return buildResponse({
+        type: 'info',
+        where,
+        what: `${typeLabel} saved, email not delivered`,
+        why: isNoticeOnlyWfh
+          ? `Notice for ${dto.targetDate} is saved and Clock-In is unlocked, but the SMTP server did not accept the email to ${managerEmail}. Check SMTP_USER and SMTP_PASS on the attendance service.`
+          : `Request for ${dto.targetDate} is saved as PENDING in the review queue, but the SMTP server did not accept the email to ${managerEmail}. Check SMTP_USER and SMTP_PASS on the attendance service.`,
+        data: saved,
+      });
+    }
+
     return buildResponse({
       where,
       what: isNoticeOnlyWfh
@@ -464,8 +476,16 @@ export class AttendanceRequestsService {
     return this.attendanceRepo.save(attendance);
   }
 
+  // Feature: Sender Email Sanitization — Purpose: Extracts pure email address from quoted or bracketed strings for RFC 5322 compliance.
+  // OOP: Private Pure Helper Method — Connected To: sendApprovalRequestEmail() and sendDecisionNotificationEmail().
+  private extractCleanEmail(raw: string): string {
+    if (!raw) return '';
+    const match = raw.match(/<([^>]+)>/);
+    return match ? match[1].trim() : raw.replace(/["']/g, '').trim();
+  }
+
   // Feature: Department Manager & HRD SMTP Dispatch — Purpose: Sends a formatted approval request email from the employee to their Department Manager (`to`) and HRD (`cc`).
-  // OOP: Encapsulated Helper Method — Connected To: Called by create() above -> Delivered to MailHog / SMTP server.
+  // OOP: Encapsulated Helper Method — Connected To: Called by create() above -> Delivered through the SMTP provider in SMTP_HOST (Gmail or Outlook).
   private async sendApprovalRequestEmail(params: {
     employee: Employee;
     managerName: string;
@@ -553,8 +573,10 @@ export class AttendanceRequestsService {
       </div>
     `;
 
+    // With a real SMTP login the From header is the bare signed in address; the employee stays reachable through Reply-To.
+    const cleanSenderEmail = this.smtpUser || this.extractCleanEmail(this.smtpFrom) || employee.email;
     const fromAddress = this.smtpUser
-      ? `"${employee.fullName} (via Dexa WFH)" <${this.smtpFrom || this.smtpUser}>`
+      ? cleanSenderEmail
       : `"${employee.fullName} (${employee.employeeCode})" <${employee.email}>`;
 
     const overrideRecipient = this.config.get<string>('SMTP_OVERRIDE_RECIPIENT');
@@ -581,7 +603,7 @@ export class AttendanceRequestsService {
     try {
       await this.transporter.sendMail({
         from: fromAddress,
-        sender: employee.email,
+        sender: this.smtpUser ? undefined : employee.email,
         replyTo: `"${employee.fullName}" <${employee.email}>`,
         to: actualTo,
         cc: actualCc,
@@ -606,8 +628,9 @@ export class AttendanceRequestsService {
     const subject = `Dexa Group ${req.requestType.replace('_', ' ')} ${req.status} — ${req.targetDate}`;
     const isApproved = req.status === ApprovalStatus.APPROVED;
 
+    const cleanReviewerFrom = this.smtpUser || this.extractCleanEmail(this.smtpFrom) || reviewerEmail || 'admin.hrd@dexagroup.com';
     const fromAddress = this.smtpUser
-      ? `"Dexa Group HRD Approval" <${this.smtpFrom || this.smtpUser}>`
+      ? cleanReviewerFrom
       : `"Dexa Group HRD Approval" <${reviewerEmail || 'admin.hrd@dexagroup.com'}>`;
 
     const html = `
