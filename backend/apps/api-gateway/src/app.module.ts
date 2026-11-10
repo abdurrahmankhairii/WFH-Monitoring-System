@@ -12,12 +12,14 @@ import { AttendanceController } from './attendance/attendance.controller';
 import { AuthController } from './auth/auth.controller';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { RolesGuard } from './auth/roles.guard';
+import { BiometricClientService } from './biometric/biometric-client.service';
+import { DatabaseManagementController } from './database-management/database-management.controller';
 import { EmployeesController } from './employee/employees.controller';
 import { SupportController } from './support/support.controller';
 import { SystemController } from './system/system.controller';
 
-// Feature: Core System Architecture — Purpose: Root module for the HTTP API Gateway (:3000).
-// OOP: Functional Helper Module — Connected To: Bootstrapped by backend/apps/api-gateway/src/main.ts.
+// Feature: Core System Architecture — Purpose: Root module for the HTTP API Gateway (:3000) with BiometricClientService and DatabaseManagementController registration.
+// OOP: NestJS Root Module (Dependency Injection Composition) — Connected To: Bootstrapped by backend/apps/api-gateway/src/main.ts.
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
@@ -47,7 +49,15 @@ import { SystemController } from './system/system.controller';
       },
     ]),
   ],
-  controllers: [SystemController, AuthController, EmployeesController, AttendanceController, SupportController],
-  providers: [JwtAuthGuard, RolesGuard],
+  controllers: [
+    SystemController,
+    AuthController,
+    EmployeesController,
+    AttendanceController,
+    SupportController,
+    DatabaseManagementController,
+  ],
+  providers: [JwtAuthGuard, RolesGuard, BiometricClientService],
+  exports: [BiometricClientService],
 })
 export class AppModule {}

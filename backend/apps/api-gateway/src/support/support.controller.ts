@@ -43,9 +43,21 @@ export class SupportController {
   // Feature: Contact Developer Support via SMTP — Purpose: Marks a support ticket as RESOLVED (HR_ADMIN).
   // OOP: Controller Action (HTTP Request Handler) — Connected To: PATCH /api/support/tickets/:id/resolve -> HRD Admin view.
   @Patch('tickets/:id/resolve')
-  @Roles(UserRole.HR_ADMIN)
+  @Roles(UserRole.HR_ADMIN, UserRole.SYSTEM_ADMIN)
   @ApiOperation({ summary: 'Mark a support ticket as resolved (HR_ADMIN)' })
   resolveTicket(@CurrentUser() actor: ActorContext, @Param('id') id: string) {
     return sendRpc(this.employeeClient, SUPPORT_PATTERNS.RESOLVE, { actor, id });
+  }
+
+  // Feature: SMTP Diagnostic Testing — Purpose: Sends an instant diagnostic test email to verify SMTP gateway connectivity and real-world inbox delivery.
+  // OOP: Controller Action (HTTP Request Handler) — Connected To: POST /api/support/test-email -> Consumed by System Admin / HR Admin diagnostics.
+  @Post('test-email')
+  @Roles(UserRole.SYSTEM_ADMIN, UserRole.HR_ADMIN)
+  @ApiOperation({ summary: 'Send diagnostic test email to verify SMTP gateway handshake' })
+  sendTestEmail(@CurrentUser() actor: ActorContext, @Body('targetEmail') targetEmail?: string) {
+    return sendRpc(this.employeeClient, SUPPORT_PATTERNS.TEST_EMAIL, {
+      actor,
+      targetEmail: targetEmail || actor.email,
+    });
   }
 }

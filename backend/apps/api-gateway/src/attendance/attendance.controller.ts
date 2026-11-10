@@ -7,6 +7,7 @@ import {
   Body,
   Controller,
   Get,
+  HttpException,
   Inject,
   Param,
   Patch,
@@ -46,6 +47,7 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/roles.guard';
 import { sendRpc } from '../common/rpc.util';
 import { persistAttachmentFile, persistPhotoProof } from '../storage/photo-metadata.util';
+import { BiometricClientService } from '../biometric/biometric-client.service';
 
 // Feature: WFH Attendance Monitoring & Self-Service — Purpose: HTTP Gateway controller for WFH Attendance (Clock-In/Out with photo proof & EXIF inspection), personal history,.
 // OOP: API Gateway Controller (HTTP Ingress Adapter) — Connected To: Forwards TCP commands to `attendance-service` (:3002) -> Consumed by Employee and HRD Admin portals.
@@ -57,7 +59,68 @@ export class AttendanceController {
   constructor(
     @Inject(ATTENDANCE_SERVICE)
     private readonly attendanceClient: ClientProxy,
+    private readonly biometricClient: BiometricClientService,
   ) {}
+
+  // Feature: Pre-Liveness Face Verification — Purpose: Verifies webcam face frame against employee's enrolled 512-D embedding via InsightFace ArcFace.
+  // OOP: Controller Action (HTTP Request Handler) — Connected To: POST /api/attendances/verify-face-preview -> frontend CameraPhotoUpload.tsx.
+  @Post('attendances/verify-face-preview')
+  @ApiConsumes('multipart/form-data')
+  @UseInterceptors(FileInterceptor('photo', { storage: memoryStorage() }))
+  @ApiOperation({ summary: 'Verify employee facial identity with InsightFace before active liveness challenges' })
+  async verifyFacePreview(
+    @CurrentUser() actor: ActorContext,
+    @UploadedFile() file: Express.Multer.File | undefined,
+  ) {
+    const where = 'Biometric - Pre-Liveness Face Verification';
+    if (!file || !file.buffer) {
+      throw new HttpException(
+        {
+          statusCode: 400,
+          where,
+          what: 'Face photo frame is required',
+          why: 'Please position your face inside the camera oval.',
+        },
+        400,
+      );
+    }
+
+    const extractResult = await this.biometricClient.extractEmbedding(file.buffer, file.originalname);
+    if (extractResult.status === 'NO_FACE') {
+      return {
+        statusCode: 200,
+        type: 'info',
+        where,
+        what: 'Searching for face',
+        why: 'No face detected in video frame. Please position your face inside the oval.',
+        data: {
+          recognized: false,
+          faceDetected: false,
+          message: 'Align your face inside the biometric oval.',
+        },
+      };
+    }
+
+    if (extractResult.status === 'MULTIPLE_FACES') {
+      return {
+        statusCode: 200,
+        type: 'error',
+        where,
+        what: 'Multiple faces detected',
+        why: `Found ${extractResult.face_count} faces in frame. Verification must be performed individually.`,
+        data: {
+          recognized: false,
+          faceDetected: true,
+          message: `Multiple faces detected (${extractResult.face_count}).`,
+        },
+      };
+    }
+
+    return sendRpc(this.attendanceClient, ATTENDANCE_PATTERNS.VERIFY_FACE_PREVIEW, {
+      actor,
+      probeEmbedding: extractResult.embedding,
+    });
+  }
 
   // Feature: WFH Attendance Clock-In — Purpose: Accepts multipart Clock-In submission (watermarked webcam/upload photo + daily plan), extracts EXIF metadata, and forwards.
   // OOP: Controller Action (HTTP Request Handler) — Connected To: POST /api/attendances/clock-in -> frontend/src/pages/employee/EmployeeAttendancePage.tsx.
@@ -65,17 +128,66 @@ export class AttendanceController {
   @ApiConsumes('multipart/form-data')
   @UseInterceptors(FileInterceptor('photo', { storage: memoryStorage() }))
   @ApiOperation({ summary: 'Submit WFH Clock-In with watermarked photo proof and daily work plan' })
-  clockIn(
+  async clockIn(
     @CurrentUser() actor: ActorContext,
     @UploadedFile() file: Express.Multer.File | undefined,
     @Body() dto: ClockInDto,
     @Req() req: Request,
   ) {
+    const where = 'WFH Attendance - Clock In Verification';
+    if (actor.role === UserRole.SYSTEM_ADMIN) {
+      throw new HttpException(
+        {
+          statusCode: 403,
+          where,
+          what: 'Clock-In disabled for System Administrator',
+          why: 'System Administrator accounts are reserved for platform administration and data management. Please sign in with an Employee or Manager account to record operational attendance.',
+        },
+        403,
+      );
+    }
+    if (!file || !file.buffer) {
+      throw new HttpException(
+        {
+          statusCode: 400,
+          where,
+          what: 'WFH photo proof is required',
+          why: 'Please capture a live webcam photo or upload a timestamped photo before clocking in.',
+        },
+        400,
+      );
+    }
+
+    const extractResult = await this.biometricClient.extractEmbedding(file.buffer, file.originalname);
+    if (extractResult.status === 'NO_FACE') {
+      throw new HttpException(
+        {
+          statusCode: 422,
+          where,
+          what: 'No face detected in attendance photo',
+          why: 'The submitted photo does not contain a recognizable human face. Please ensure good lighting and face the camera directly.',
+        },
+        422,
+      );
+    }
+    if (extractResult.status === 'MULTIPLE_FACES') {
+      throw new HttpException(
+        {
+          statusCode: 422,
+          where,
+          what: 'Multiple faces detected in attendance photo',
+          why: `Found ${extractResult.face_count} faces. WFH attendance verification must be performed individually without bystanders.`,
+        },
+        422,
+      );
+    }
+
     const photo = persistPhotoProof({
       file,
       captureSource: dto.captureSource,
       clientCapturedAt: dto.photoCapturedAt,
       prefix: 'clock-in',
+      actor,
       employeeCodeOrId: actor.employeeId ?? actor.userId,
     });
 
@@ -88,6 +200,15 @@ export class AttendanceController {
       dailyPlan: dto.dailyPlan ?? null,
       ipAddress,
       deviceInfo,
+      verificationMethod: dto.verificationMethod,
+      livenessScore: dto.livenessScore,
+      latitude: dto.latitude,
+      longitude: dto.longitude,
+      address: dto.address,
+      deviceIssueReason: dto.deviceIssueReason,
+      probeEmbedding: extractResult.embedding,
+      imageHash: extractResult.image_hash,
+      imagePhash: extractResult.image_phash,
     });
   }
 
@@ -97,16 +218,65 @@ export class AttendanceController {
   @ApiConsumes('multipart/form-data')
   @UseInterceptors(FileInterceptor('photo', { storage: memoryStorage() }))
   @ApiOperation({ summary: 'Submit WFH Clock-Out with photo proof and mandatory daily accomplishment summary' })
-  clockOut(
+  async clockOut(
     @CurrentUser() actor: ActorContext,
     @UploadedFile() file: Express.Multer.File | undefined,
     @Body() dto: ClockOutDto,
   ) {
+    const where = 'WFH Attendance - Clock Out Verification';
+    if (actor.role === UserRole.SYSTEM_ADMIN) {
+      throw new HttpException(
+        {
+          statusCode: 403,
+          where,
+          what: 'Clock-Out disabled for System Administrator',
+          why: 'System Administrator accounts are reserved for platform administration and data management. Please sign in with an Employee or Manager account to record operational attendance.',
+        },
+        403,
+      );
+    }
+    if (!file || !file.buffer) {
+      throw new HttpException(
+        {
+          statusCode: 400,
+          where,
+          what: 'WFH photo proof is required',
+          why: 'Please capture a live webcam photo or upload a timestamped photo before clocking out.',
+        },
+        400,
+      );
+    }
+
+    const extractResult = await this.biometricClient.extractEmbedding(file.buffer, file.originalname);
+    if (extractResult.status === 'NO_FACE') {
+      throw new HttpException(
+        {
+          statusCode: 422,
+          where,
+          what: 'No face detected in attendance photo',
+          why: 'The submitted photo does not contain a recognizable human face. Please ensure good lighting and face the camera directly.',
+        },
+        422,
+      );
+    }
+    if (extractResult.status === 'MULTIPLE_FACES') {
+      throw new HttpException(
+        {
+          statusCode: 422,
+          where,
+          what: 'Multiple faces detected in attendance photo',
+          why: `Found ${extractResult.face_count} faces. WFH attendance verification must be performed individually without bystanders.`,
+        },
+        422,
+      );
+    }
+
     const photo = persistPhotoProof({
       file,
       captureSource: dto.captureSource,
       clientCapturedAt: dto.photoCapturedAt,
       prefix: 'clock-out',
+      actor,
       employeeCodeOrId: actor.employeeId ?? actor.userId,
     });
 
@@ -114,6 +284,15 @@ export class AttendanceController {
       actor,
       photo,
       dailyAccomplishment: dto.dailyAccomplishment,
+      verificationMethod: dto.verificationMethod,
+      livenessScore: dto.livenessScore,
+      latitude: dto.latitude,
+      longitude: dto.longitude,
+      address: dto.address,
+      deviceIssueReason: dto.deviceIssueReason,
+      probeEmbedding: extractResult.embedding,
+      imageHash: extractResult.image_hash,
+      imagePhash: extractResult.image_phash,
     });
   }
 
@@ -144,7 +323,7 @@ export class AttendanceController {
   // Feature: HRD Real-Time Monitoring Dashboard — Purpose: Returns real-time HRD dashboard aggregations (present, on-time, late, department breakdown, 7-day trend).
   // OOP: Controller Action (HTTP Request Handler) — Connected To: GET /api/attendances/summary -> frontend/src/pages/hrd/HrdDashboardPage.tsx.
   @Get('attendances/summary')
-  @Roles(UserRole.HR_ADMIN)
+  @Roles(UserRole.HR_ADMIN, UserRole.MANAGER, UserRole.SYSTEM_ADMIN)
   @ApiOperation({ summary: 'Get HRD real-time attendance dashboard summary and department aggregations (HR_ADMIN)' })
   getSummary(@CurrentUser() actor: ActorContext, @Query() query: SummaryQueryDto) {
     return sendRpc(this.attendanceClient, ATTENDANCE_PATTERNS.SUMMARY, { actor, date: query.date });
@@ -153,7 +332,7 @@ export class AttendanceController {
   // Feature: Data Export & Payroll Reporting — Purpose: Streams a payroll-ready `.xlsx` (Excel) or `.csv` report directly to the browser for HRD Admin.
   // OOP: Controller Action (HTTP Request Handler) — Connected To: GET /api/attendances/export -> ExportService in attendance-service -> frontend AttendanceMonitoringPage.tsx.
   @Get('attendances/export')
-  @Roles(UserRole.HR_ADMIN)
+  @Roles(UserRole.HR_ADMIN, UserRole.MANAGER, UserRole.SYSTEM_ADMIN)
   @ApiOperation({ summary: 'Export filtered WFH attendance records to .xlsx (Excel) or .csv (HR_ADMIN)' })
   async exportAttendance(
     @CurrentUser() actor: ActorContext,
@@ -178,7 +357,7 @@ export class AttendanceController {
   // Feature: WFH Attendance Monitoring & Self-Service — Purpose: Lists all employee WFH attendance records with dynamic filters for HRD Admin monitoring (view-only control).
   // OOP: Controller Action (HTTP Request Handler) — Connected To: GET /api/attendances -> frontend/src/pages/hrd/AttendanceMonitoringPage.tsx.
   @Get('attendances')
-  @Roles(UserRole.HR_ADMIN)
+  @Roles(UserRole.HR_ADMIN, UserRole.MANAGER, UserRole.SYSTEM_ADMIN)
   @ApiOperation({ summary: 'List all employee WFH attendance logs with dynamic filters (HR_ADMIN view-only control)' })
   findAll(@CurrentUser() actor: ActorContext, @Query() query: AttendanceQueryDto) {
     return sendRpc(this.attendanceClient, ATTENDANCE_PATTERNS.FIND_ALL, { actor, query });
@@ -203,7 +382,7 @@ export class AttendanceController {
     @UploadedFile() file: Express.Multer.File | undefined,
     @Body() dto: CreateAttendanceRequestDto,
   ) {
-    const attachmentUrl = persistAttachmentFile(file, actor.employeeId ?? actor.userId);
+    const attachmentUrl = persistAttachmentFile(file, actor);
     return sendRpc(this.attendanceClient, ATTENDANCE_REQUEST_PATTERNS.CREATE, {
       actor,
       dto,
@@ -222,8 +401,8 @@ export class AttendanceController {
   // Feature: WFH Attendance Monitoring & Self-Service — Purpose: Lists all employee Leave / Sick / Correction requests for HRD Admin review.
   // OOP: Controller Action (HTTP Request Handler) — Connected To: GET /api/attendance-requests -> frontend AttendanceMonitoringPage.tsx.
   @Get('attendance-requests')
-  @Roles(UserRole.HR_ADMIN)
-  @ApiOperation({ summary: 'List all employee Leave, Sick, and Attendance Correction requests (HR_ADMIN)' })
+  @Roles(UserRole.HR_ADMIN, UserRole.MANAGER, UserRole.SYSTEM_ADMIN)
+  @ApiOperation({ summary: 'List employee Leave, Sick, and Attendance Correction requests (HR_ADMIN, MANAGER, SYSTEM_ADMIN)' })
   findAllRequests(@CurrentUser() actor: ActorContext, @Query() query: AttendanceRequestQueryDto) {
     return sendRpc(this.attendanceClient, ATTENDANCE_REQUEST_PATTERNS.FIND_ALL, { actor, query });
   }
@@ -231,8 +410,8 @@ export class AttendanceController {
   // Feature: WFH Attendance Monitoring & Self-Service — Purpose: Approves or rejects a pending Leave / Sick / Correction request and automatically updates `attendances`.
   // OOP: Controller Action (HTTP Request Handler) — Connected To: PATCH /api/attendance-requests/:id/review -> frontend AttendanceMonitoringPage.tsx.
   @Patch('attendance-requests/:id/review')
-  @Roles(UserRole.HR_ADMIN)
-  @ApiOperation({ summary: 'Approve or reject an attendance request and sync attendance record (HR_ADMIN)' })
+  @Roles(UserRole.HR_ADMIN, UserRole.MANAGER, UserRole.SYSTEM_ADMIN)
+  @ApiOperation({ summary: 'Approve or reject an attendance request and sync attendance record (HR_ADMIN, MANAGER, SYSTEM_ADMIN)' })
   reviewRequest(
     @CurrentUser() actor: ActorContext,
     @Param('id') id: string,

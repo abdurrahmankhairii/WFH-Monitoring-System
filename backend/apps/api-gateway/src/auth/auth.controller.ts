@@ -10,6 +10,7 @@ import {
   AUTH_PATTERNS,
   ActorContext,
   ChangePasswordDto,
+  EMPLOYEE_PATTERNS,
   EMPLOYEE_SERVICE,
   EmailOnlyDto,
   LoginDto,
@@ -66,6 +67,14 @@ export class AuthController {
   @ApiOperation({ summary: 'Change current user password' })
   changePassword(@CurrentUser() actor: ActorContext, @Body() dto: ChangePasswordDto) {
     return sendRpc(this.employeeClient, AUTH_PATTERNS.CHANGE_PASSWORD, { actor, dto });
+  }
+
+  // Feature: Public Department Directory — Purpose: Exposes active departments from database table department for registration dropdown.
+  // OOP: Controller Action (HTTP Request Handler) — Connected To: TCP `employee.department_directory` -> frontend/src/pages/auth/RequestAccessPage.tsx.
+  @Get('departments')
+  @ApiOperation({ summary: 'Get active departments from database table department for registration dropdown' })
+  getDepartments() {
+    return sendRpc(this.employeeClient, EMPLOYEE_PATTERNS.DEPARTMENT_DIRECTORY, {});
   }
 
   // Feature: Employee Onboarding Access Request — Purpose: Public endpoint for new employees to submit an onboarding access request for HRD approval.
