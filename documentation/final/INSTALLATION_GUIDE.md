@@ -13,7 +13,8 @@
 
 > [!IMPORTANT]
 > **Local assessment scope.** This system is designed and configured **only for local evaluation** of a technical assessment. It runs entirely on your own machine through Docker Compose, or as natively started services. Nothing is deployed to a cloud provider, and no paid external service (AWS, GCP, SendGrid, S3, etc.) is required:
-> - **Email** is sent to **Mailpit**, a local SMTP catcher. No email ever leaves your machine; you read every OTP, approval request and support ticket in the Mailpit web inbox at `http://localhost:8025`.
+> - **Real SMTP Auto-Emailing Engine:** Automated live email delivery via **Google Gmail SMTP** (`smtp.gmail.com:587`, STARTTLS with Google App Password) or **Microsoft Outlook / Office 365** (`smtp.office365.com:587`). Includes **Smart Evaluation Forwarding** (`SMTP_OVERRIDE_RECIPIENT`), which automatically delivers all system notifications (OTPs, WFH requests, approval decisions, and support tickets) directly to your real inbox in real-time with an evaluation alert banner.
+- **Diagnostic Endpoint:** `POST /api/support/test-email` allows administrators to verify live SMTP handshakes and delivery instantly.
 > - **Photos and attachments** are written to the **local disk** in a year/department/role/person/month folder tree under `uploads/`.
 > - **Face recognition** runs locally on the CPU through InsightFace and ONNX Runtime. Only the one-time model download needs internet access.
 
@@ -267,12 +268,27 @@ WORK_START_TIME=08:30
 LATE_GRACE_MINUTES=15
 HALF_DAY_THRESHOLD_MINUTES=240
 
-# 5. SMTP Email Configuration (Mailpit :1025 / Web UI :8025)
-SMTP_HOST=127.0.0.1
-SMTP_PORT=1025
+# 5. Real SMTP Email Configuration (Google Gmail & Microsoft Outlook)
+# ----------------------------------------------------------------------------
+# Option A (Recommended): Real Google Gmail SMTP (Direct Real-World Inbox Delivery):
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
 SMTP_SECURE=false
-SMTP_USER=
-SMTP_PASS=
+SMTP_USER=your_email@gmail.com
+SMTP_PASS=your_16_digit_app_password
+SMTP_FROM="Dexa Group WFH Monitoring" <your_email@gmail.com>
+
+# Option B: Real Microsoft Outlook / Office 365 SMTP:
+# SMTP_HOST=smtp.office365.com
+# SMTP_PORT=587
+# SMTP_SECURE=false
+# SMTP_USER=your_email@outlook.com
+# SMTP_PASS=your_outlook_password
+# SMTP_FROM="Dexa Group WFH Monitoring" <your_email@outlook.com>
+
+# Smart Evaluation Forwarding (Directs all demo @dexagroup.com notifications to your real inbox):
+SMTP_OVERRIDE_RECIPIENT=your_email@gmail.com
+
 SYSTEM_NOREPLY_EMAIL=noreply-wfh@dexagroup.com
 DEVELOPER_SUPPORT_EMAIL=abdurrahman.khairi@dexagroup.com
 
@@ -529,11 +545,11 @@ flowchart LR
     T2 --> T1
 ```
 
-### Step 1 — Start infrastructure (MySQL 8.0 & Mailpit)
+### Step 1 — Start infrastructure (MySQL 8.0 Only)
 
 ```bash
 cp .env.example .env            # root .env: DB_HOST=127.0.0.1, SMTP_HOST=127.0.0.1
-docker compose up -d mysql mailpit
+docker compose up -d mysql
 docker compose ps               # wait until mysql shows "healthy"
 ```
 
@@ -725,9 +741,9 @@ docker compose exec mysql mysql -udexa_user -pdexa_password_2026 dexa_wfh_db -e 
 | PDF export | **Browser print dialog** (`window.print()`) from the monitoring page; save as PDF from there |
 | EXIF `DateTimeOriginal` must be same-day | Upload must be the **same WIB day and ≤ 12 h old**. A browser-supplied capture time is also accepted (see PRD defect D4). |
 
-### 9.1 Mailpit web UI (`http://localhost:8025`)
+### 9.1 Real Email Inbox Verification (Gmail / Outlook)
 
-Keep Mailpit open in a second browser window throughout testing. These system emails arrive there:
+All system emails arrive directly in your real inbox configured in `SMTP_OVERRIDE_RECIPIENT` (Gmail or Outlook):
 
 | Trigger | Typical recipients |
 |---|---|
@@ -762,27 +778,47 @@ sequenceDiagram
 
 1. Open `http://localhost:5173/login` and sign in as `employee.four@dexagroup.com` with any password. The password is not checked before verification.
 2. The response is **HTTP 200** with `requiresVerification: true` (not a 403). The app moves you to `/verify-account`.
-3. In Mailpit, open the newest **account verification** email and copy the 6-digit code.
+3. In your real email inbox, open the newest **account verification** email and copy the 6-digit code.
 4. Enter the code and a new password. The form pre-fills `EmployeeDexa2026!`, and the password must meet the strong-password rule. The OTP is valid for **15 minutes** and allows **5 attempts**.
 5. You are signed in and sent to face enrollment.
 
 Also try:
-- **Forgot password:** `/forgot-password`, then use the OTP from Mailpit.
+- **Forgot password:** `/forgot-password`, then use the OTP delivered to your real email inbox.
 - **Public onboarding:** `/request-access` creates an **access request**. HR Admin or System Admin reviews it on `/hrd/employees`.
 
 > [!WARNING]
 > **Known defect D2 (PRD §9):** the employees page calls `PATCH /api/access-requests/:id/review`, which does not exist (the API has `/approve` and `/reject`). Approving or rejecting an access request from the UI therefore returns **404**. Use Swagger (`/api/docs`) to call `/approve` or `/reject` directly if you need to finish that flow.
 
-### 9.3 Flow 2 — Biometric face enrollment (`/auth/enroll-face`)
+### 9.3 Flow 2 — Biometric face enrollment, Duplicate Face Prevention & Sibling Exemption
 
-1. Sign in as any non-System-Admin account without a face (for example `employee.one@dexagroup.com` / `EmployeeDexa2026!`). You are redirected to `/auth/enroll-face`.
-2. Allow camera access for `http://localhost:5173` when the browser asks.
-3. Centre your face in the oval guide, with good front lighting and no other faces in view, then capture.
-4. The gateway sends the photo to `POST http://biometric-service:8000/extract-embedding`. Exactly **one** face must be found (`NO_FACE` and `MULTIPLE_FACES` are rejected). The 512-D vector is stored in `employees.face_embedding`.
-5. Check in MySQL:
+1. **Initial Face Enrollment:**
+   - Sign in as any non-System-Admin account without a face (for example `employee.one@dexagroup.com` / `EmployeeDexa2026!`). You are redirected to `/auth/enroll-face`.
+   - Allow camera access for `http://localhost:5173` when the browser asks.
+   - Centre your face in the oval guide, with good front lighting and no other faces in view, then capture.
+   - The gateway sends the photo to `POST http://biometric-service:8000/extract-embedding`. Exactly **one** face must be found (`NO_FACE` and `MULTIPLE_FACES` are rejected).
+   - The 512-D vector is checked for duplicates against all existing employees in the database before saving.
+
+2. **1:N Duplicate Face Prevention (3-Tier Engine):**
+   - **Tier 1 (Unique Face, Similarity < 50% / 0.50):** The embedding is unique and successfully stored in `employees.face_embedding`.
+   - **Tier 2 (Sibling / High Resemblance, 50% ≤ Similarity < 90%):**
+     - If `is_sibling_exempt = false`: The system immediately blocks registration with **HTTP 409 Conflict**:
+       `"Wajah sudah terdaftar! Wajah ini memiliki kemiripan biometrik X% dengan profil karyawan '<Name>' (<NIP>). Jika Anda memiliki saudara kandung atau kembar di Dexa Group, hubungi HR Admin untuk mengaktifkan Sibling Biometric Exemption."`
+     - If `is_sibling_exempt = true`: Registration succeeds under logged HR administrative override.
+   - **Tier 3 (Identical Photo / Hard Duplicate, Similarity ≥ 90% / 0.90):**
+     - Strictly blocked with **HTTP 409 Conflict**:
+       `"Wajah terdeteksi identik (X%) dengan karyawan '<Name>' (<NIP>). Sistem menolak pendaftaran foto yang sama untuk akun berbeda demi keamanan biometrik."` (Bypass prohibited).
+
+3. **Assessor Walkthrough: Testing Duplicate Face Detection & Sibling Exemption:**
+   - Sign in as `employee.one@dexagroup.com` and enroll your face.
+   - Log out, then sign in as an un-enrolled account (e.g. `employee.four@dexagroup.com`).
+   - Try to enroll the **same face**: observe the **HTTP 409 Conflict** error dialog identifying the conflict with Employee One.
+   - Now log in as `admin.hrd@dexagroup.com` (`AdminDexa2026!`), open **Employee Management** (`/hrd/employees`), locate Employee Four, and toggle **Sibling Biometric Exemption** to `ON` (`PATCH /api/employees/:id/sibling-exemption`).
+   - Log back in as `employee.four@dexagroup.com` and capture your face again: enrollment now succeeds with the sibling exemption applied!
+
+4. Check in MySQL:
    ```bash
    docker compose exec mysql mysql -udexa_user -pdexa_password_2026 dexa_wfh_db -e \
-   "SELECT employee_code, face_embedding IS NOT NULL AS enrolled FROM employees WHERE email='employee.one@dexagroup.com';"
+   "SELECT employee_code, full_name, is_sibling_exempt, face_embedding IS NOT NULL AS enrolled FROM employees WHERE email IN ('employee.one@dexagroup.com', 'employee.four@dexagroup.com');"
    ```
 
 ### 9.4 Flows 3 & 4 — WFH request, upward escalation & biometric clock-in
@@ -790,8 +826,8 @@ Also try:
 #### 9.4.1 WFH request as `EMPLOYEE` vs `MANAGER`
 
 1. As **`employee.one@dexagroup.com`**, open `/employee/attendance` and submit a **WFH** request (type `WFH_APPROVAL`) for today.
-2. In Mailpit, the email goes **to `manager.it@dexagroup.com`** with **CC `admin.hrd@dexagroup.com` + `employee.one@dexagroup.com`**. Its button links to `http://localhost:5173/manager/approvals?requestId=<uuid>`.
-3. Sign in as **`manager.it@dexagroup.com`** / `ManagerDexa2026!` (enroll a face first if prompted). Submit a WFH request from the same page. In Mailpit, the email now goes **to `admin.hrd@dexagroup.com`** with **CC `sysadmin@dexagroup.com`**, HR and the manager. This is the upward escalation.
+2. In your real email inbox, the email arrives **to `manager.it@dexagroup.com`** with **CC `admin.hrd@dexagroup.com` + `employee.one@dexagroup.com`**. Its button links to `http://localhost:5173/manager/approvals?requestId=<uuid>`.
+3. Sign in as **`manager.it@dexagroup.com`** / `ManagerDexa2026!` (enroll a face first if prompted). Submit a WFH request from the same page. In your real email inbox, the email now arrives **to `admin.hrd@dexagroup.com`** with **CC `sysadmin@dexagroup.com`**, HR and the manager. This is the upward escalation.
 4. The WFH policy mode (`STRICT_APPROVAL` or `NOTICE_ONLY`) and the **1 day/week** quota come from the company policy (`/api/system/policy`), falling back to the department settings. In `NOTICE_ONLY` mode, requests are approved automatically.
 
 #### 9.4.2 Live webcam clock-in
@@ -852,7 +888,7 @@ You will not usually work 9+ hours during an evaluation. To see overtime figures
 ### 9.6 Flow 6 — Leave, sick & attendance correction via the email link
 
 1. As `employee.two@dexagroup.com`, open the **Leave & Correction** modal and submit a **CORRECTION** request with a requested clock-in and/or clock-out time, a reason and an optional proof attachment. Leave and sick requests work the same way.
-2. In Mailpit, the email goes to `manager.finance@dexagroup.com`. Click its **review** button. It opens `http://localhost:5173/manager/approvals?requestId=<uuid>`; sign in as `manager.finance@dexagroup.com` / `ManagerDexa2026!` if asked.
+2. In your real email inbox, the email arrives to `manager.finance@dexagroup.com`. Click its **review** button. It opens `http://localhost:5173/manager/approvals?requestId=<uuid>`; sign in as `manager.finance@dexagroup.com` / `ManagerDexa2026!` if asked.
 3. **Approve** the request. The status changes `PENDING → APPROVED`, and the attendance service creates or updates the matching row in `attendances` for that date.
 4. Check the result:
    ```bash
@@ -925,7 +961,7 @@ find uploads -type f | head          # PowerShell: Get-ChildItem uploads -Recurs
 
 ### 9.10 Assessor checklist
 
-- [ ] All seven containers are `healthy` or running (`docker compose ps`)
+- [ ] All six microservice containers are `healthy` or running (`docker compose ps`)
 - [ ] `/api/system/health` returns OK; Swagger loads at `:3000/api/docs` and `:8000/docs`
 - [ ] Unverified login → OTP in Mailpit → `/verify-account` succeeds
 - [ ] Face enrollment stores a 512-D embedding
@@ -973,7 +1009,7 @@ find uploads -type f | head          # PowerShell: Get-ChildItem uploads -Recurs
 | `pip install insightface` fails on Windows with `Microsoft Visual C++ 14.0 or greater is required` | Install *Microsoft C++ Build Tools* with the "Desktop development with C++" workload, open a new terminal and retry. |
 | macOS on Linux/arm64, or a slow first request | The first `/extract-embedding` call loads five ONNX models. Allow up to ~20 s on slower CPUs; later calls are fast. |
 
-### 10.4 Port conflicts (3000, 3001, 3002, 3306, 5173, 8000, 1025, 8025)
+### 10.4 Port conflicts (3000, 3001, 3002, 3306, 5173, 8000)
 
 ```powershell
 # Windows: find the process using a port, then stop it
@@ -1012,9 +1048,10 @@ In Method B, start `employee-service` first on an empty database (Section 7, Ste
 
 ### 10.6 OTP email never arrives
 
-- Check that Mailpit is running (`http://localhost:8025`) and that the service uses the right SMTP host:
-  - Docker: `SMTP_HOST=mailpit`
-  - Method B: `SMTP_HOST=127.0.0.1`
+- Check that your SMTP credentials in `.env` are valid:
+  - Google Gmail: Ensure you are using a 16-character Google App Password (not your normal password) with `SMTP_HOST=smtp.gmail.com` and `SMTP_PORT=587`.
+  - Ensure `SMTP_OVERRIDE_RECIPIENT` is set to your active email inbox.
+  - Test the connection using `POST /api/support/test-email`.
 - If SMTP delivery fails, the login response message itself contains the OTP (*"Enter 6-digit OTP … (local SMTP preview)"*).
 - In Method B (`NODE_ENV` unset), the response also includes `demoOtpHint`.
 
@@ -1035,7 +1072,24 @@ In Method B, start `employee-service` first on an empty database (Section 7, Ste
 > [!CAUTION]
 > `docker compose down -v` permanently deletes every attendance record, request, enrolled face and account change stored in the `dexa_mysql_data` volume. Files in `uploads/` are **not** removed by it.
 
-### 10.8 FAQ
+### 10.7 Real SMTP Auto-Emailing Troubleshooting & Gmail App Passwords
+
+| Issue | Cause & Recommended Fix |
+|---|---|
+| **Gmail Error: `535 5.7.8 Username and Password not accepted`** | You cannot use your standard Google account login password. You must generate a **16-character Google App Password**: Go to **Google Account** → **Security** → **2-Step Verification** → **App passwords** (at the bottom). Generate an app password for "Mail", paste the 16 characters into `SMTP_PASS` in `.env` (remove spaces), and restart the containers. |
+| **Outlook / Office 365 STARTTLS Connection Failure** | Microsoft Outlook (`smtp.office365.com:587`) requires modern TLS negotiation. The backend `MailService` includes automated cipher fallback (`tls: { ciphers: 'SSLv3' }`). Ensure `SMTP_SECURE=false` and `SMTP_PORT=587` so STARTTLS is properly initiated. |
+| **Evaluation Emails Not Arriving in Real Inbox** | In technical assessment testing, demo accounts (`@dexagroup.com`) do not have live MX records. Ensure `SMTP_OVERRIDE_RECIPIENT=your_email@gmail.com` is configured in `.env`. The system will forward all notifications to your inbox with a yellow diagnostic banner. |
+| **Testing Live SMTP Connection Handshake** | Use the administrative diagnostic endpoint `POST http://localhost:3000/api/support/test-email` (authenticated with Bearer token) with body `{"recipientEmail": "your_email@gmail.com"}` to test TLS handshake without waiting for an attendance trigger. |
+
+### 10.8 Biometric 409 Conflict & Sibling Resemblance Troubleshooting
+
+| Issue | Cause & Recommended Fix |
+|---|---|
+| **HTTP 409: Duplicate face registration blocked** | The submitted face has ≥ 90% cosine similarity to an already registered employee. Each employee must enroll their own unique physical face. Identical photos are strictly rejected. |
+| **HTTP 409: Biometric conflict detected (50% – 89.9%)** | The facial vector closely resembles another employee. If the employee is an identical twin or sibling, log in as HR Admin (`admin.hrd@dexagroup.com`), navigate to `/hrd/employees`, and toggle **Sibling Biometric Exemption** to `ON` (`PATCH /api/employees/:id/sibling-exemption`). |
+| **Cold Start Latency on First Enrollment** | The biometric service automatically executes `FaceBiometricService.prewarm()` during container startup to preload the 512-D ArcFace ONNX weights into RAM, ensuring sub-second inference on first user capture. |
+
+### 10.9 FAQ
 
 **Do I need a `.env` file for Docker?**
 No. Every value has a default in `docker-compose.yml`. Copying `.env.example` is only for changing those defaults.
