@@ -108,7 +108,7 @@ Docker Compose runs six containers. Email leaves through an external SMTP provid
 10. **Targeted SMTP Support Ticket Routing**
     * **To:** every active `SYSTEM_ADMIN` account (`sysadmin@dexagroup.com`).
     * **Cc:** every active `HR_ADMIN` account (`admin.hrd@dexagroup.com`) and the sender.
-    * `Reply-To` and `Sender` carry the user's own address, so a reply reaches them directly. The `From` header is the `SMTP_FROM` mailbox, because Gmail and Outlook only send as the signed in account.
+    * `Reply-To` carries the user's own address, so a reply reaches them directly. The `From` header is the bare signed in SMTP address (`SMTP_USER`), because Gmail and Outlook only send as that account.
 
 ## 5. Email Flows
 
@@ -199,11 +199,11 @@ SMTP_PORT=587
 SMTP_SECURE=false
 SMTP_USER=your_email@gmail.com
 SMTP_PASS=your_16_character_app_password
-SMTP_FROM='"Dexa Group WFH Monitoring" <your_email@gmail.com>'
+SMTP_FROM=your_email@gmail.com
 SMTP_OVERRIDE_RECIPIENT=your_email@gmail.com
 ```
 
-* Keep `SMTP_FROM` in single quotes, or Docker Compose cannot parse the inner double quotes.
+* With `SMTP_USER` and `SMTP_PASS` set, every email leaves from the bare `SMTP_USER` address. `SMTP_FROM` only applies to a relay without a login; if you give it a display name, wrap the value in single quotes so Docker Compose can parse it.
 * `SMTP_OVERRIDE_RECIPIENT` sends every email to your own inbox, because the seeded `@dexagroup.com` addresses are not real mailboxes.
 * Do not put `BIOMETRIC_SERVICE_URL` in this file: Docker Compose would pass it into the containers and replace their internal `http://biometric-service:8000` address.
 
